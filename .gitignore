@@ -1,0 +1,17 @@
+.env
+data/
+logs/
+.run/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.db
+*.db-wal
+*.db-shm
+node_modules/
+services/order/target/
+services/notification/bin/
+*.mv.db
+*.trace.db

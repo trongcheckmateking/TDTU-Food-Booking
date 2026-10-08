@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TDTU Food Booking – Đăng nhập</title>
+<link rel="icon" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/style.css">
+<script src="config.js"></script>
+<script src="assets/app.js"></script>
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="card auth-card">
+    <h1>TDTU Food Booking</h1>
+    <div class="muted">Đặt đồ ăn từ các quán gần trường</div>
+    <div class="seg" role="tablist">
+      <button id="tLogin" class="on" type="button" role="tab">Đăng nhập</button>
+      <button id="tReg" type="button" role="tab">Đăng ký</button>
+    </div>
+    <div id="msg"></div>
+    <form id="fLogin" novalidate>
+      <div class="field"><label for="lEmail">Email</label><input id="lEmail" type="email" autocomplete="username" required></div>
+      <div class="field"><label for="lPw">Mật khẩu</label><input id="lPw" type="password" autocomplete="current-password" required></div>
+      <button class="primary" style="width:100%;margin-top:16px" type="submit">Đăng nhập</button>
+    </form>
+    <form id="fReg" class="hidden" novalidate>
+      <div class="field"><label for="rName">Họ tên</label><input id="rName" maxlength="100" required></div>
+      <div class="field"><label for="rEmail">Email</label><input id="rEmail" type="email" required></div>
+      <div class="field"><label for="rPw">Mật khẩu</label><input id="rPw" type="password" minlength="6" required autocomplete="new-password">
+        <div class="small muted">6 ký tự trở lên, tối đa 72 byte</div></div>
+      <div class="field"><label for="rPhone">Số điện thoại (không bắt buộc)</label><input id="rPhone" maxlength="10" placeholder="0xxxxxxxxx"></div>
+      <div class="field"><label for="rRole">Tôi là</label>
+        <select id="rRole"><option value="sinh_vien">Sinh viên – đặt món</option><option value="chu_quan">Chủ quán – bán hàng</option></select></div>
+      <button class="primary" style="width:100%;margin-top:16px" type="submit">Tạo tài khoản</button>
+    </form>
+    <div class="demo">Tài khoản demo (sau khi chạy <span class="mono">python manage.py seed</span>):<br>
+      <button class="sm" type="button" data-e="sv1@demo.tdtu.vn" data-p="Demo@123">Sinh viên</button>
+      <button class="sm" type="button" data-e="chuquan1@demo.tdtu.vn" data-p="Demo@123">Chủ quán</button>
+      <button class="sm" type="button" data-e="admin@demo.tdtu.vn" data-p="Admin@123">Admin</button>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  const show = (text, warn) => mount($("#msg"), text ? h("div", { class: "notice" + (warn ? " warn" : "") }, text) : "");
+  const params = new URLSearchParams(location.search);
+  if (params.has("expired")) show("Phiên đăng nhập đã hết hạn hoặc bị thu hồi, vui lòng đăng nhập lại.", true);
+  if (params.has("locked")) show("Tài khoản đã bị khóa. Liên hệ quản trị viên.", true);
+
+  const s = Session.get();
+  if (s && s.token && !params.has("expired") && !params.has("locked")) {
+    api("auth", "/api/users/me", { auth: true }).then(u => { location.href = HOME[u.role]; }).catch(() => Session.clear());
+  }
+  const tab = reg => {
+    $("#tLogin").classList.toggle("on", !reg); $("#tReg").classList.toggle("on", reg);
+    $("#fLogin").classList.toggle("hidden", reg); $("#fReg").classList.toggle("hidden", !reg); show("");
+  };
+  $("#tLogin").onclick = () => tab(false);
+  $("#tReg").onclick = () => tab(true);
+
+  async function doLogin(email, password, btn) {
+    const r = await act(btn, () => api("auth", "/api/users/login", { method: "POST", auth: false, body: { email, password } }));
+    Session.set({ token: r.access_token, user: r.user, exp: Date.now() + r.expires_in * 1000 });
+    location.href = HOME[r.user.role];
+  }
+  $("#fLogin").onsubmit = e => {
+    e.preventDefault();
+    const email = $("#lEmail").value.trim(), pw = $("#lPw").value;
+    if (!email || !pw) return show("Nhập email và mật khẩu", true);
+    doLogin(email, pw, e.submitter).catch(err => show(err.message, true));
+  };
+  $("#fReg").onsubmit = async e => {
+    e.preventDefault();
+    const body = { name: $("#rName").value.trim(), email: $("#rEmail").value.trim(), password: $("#rPw").value,
+                   role: $("#rRole").value };
+    if ($("#rPhone").value.trim()) body.phone = $("#rPhone").value.trim();
+    try {
+      await act(e.submitter, () => api("auth", "/api/users/register", { method: "POST", auth: false, body }));
+      await doLogin(body.email, body.password, null);
+    } catch (err) { show(err.message, true); }
+  };
+  document.querySelectorAll(".demo button").forEach(b => b.onclick = () => {
+    tab(false); $("#lEmail").value = b.dataset.e; $("#lPw").value = b.dataset.p;
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,641 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Notification Service",
+  "description": "Thông báo đơn hàng. API tạo sự kiện chỉ dành cho service nội bộ (header X-Internal-Key).\n\nCài đặt: Go + Gin + GORM + PostgreSQL.",
+  "version": "1.0.0",
+  "x-implementation": "Go + Gin + GORM + PostgreSQL"
+ },
+ "paths": {
+  "/": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Thông tin service",
+    "operationId": "root__get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/health": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Readiness: service và DB sẵn sàng",
+    "operationId": "health_health_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/notifications/events": {
+   "post": {
+    "tags": [
+     "internal"
+    ],
+    "summary": "Order Service gửi sự kiện đơn hàng (idempotent theo event_key)",
+    "operationId": "receive_event_internal_notifications_events_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OrderEvent"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "APIKeyHeader": []
+     }
+    ]
+   }
+  },
+  "/api/notifications/me": {
+   "get": {
+    "tags": [
+     "notifications"
+    ],
+    "summary": "Thông báo của tôi; status=unread để lọc chưa đọc",
+    "operationId": "my_notifications_api_notifications_me_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "unread",
+          "read"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NotificationPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/notifications/me/read-all": {
+   "patch": {
+    "tags": [
+     "notifications"
+    ],
+    "summary": "Đánh dấu tất cả đã đọc",
+    "operationId": "read_all_api_notifications_me_read_all_patch",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/api/notifications/{nid}/read": {
+   "patch": {
+    "tags": [
+     "notifications"
+    ],
+    "summary": "Đánh dấu 1 thông báo của mình là đã đọc",
+    "operationId": "mark_read_api_notifications__nid__read_patch",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "nid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Nid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NotificationOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/notifications": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Mọi thông báo (admin)",
+    "operationId": "admin_list_api_admin_notifications_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "unread",
+          "read"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "user_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "User Id"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NotificationPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/notifications/{nid}": {
+   "delete": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Xóa 1 thông báo (admin)",
+    "operationId": "admin_delete_api_admin_notifications__nid__delete",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "nid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Nid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "NotificationOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "user_id": {
+      "type": "string",
+      "title": "User Id"
+     },
+     "order_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Order Id"
+     },
+     "type": {
+      "type": "string",
+      "title": "Type"
+     },
+     "message": {
+      "type": "string",
+      "title": "Message"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "unread",
+       "read"
+      ],
+      "title": "Status"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "read_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Read At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "user_id",
+     "order_id",
+     "type",
+     "message",
+     "status",
+     "created_at"
+    ],
+    "title": "NotificationOut"
+   },
+   "NotificationPage": {
+    "properties": {
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/NotificationOut"
+      },
+      "type": "array",
+      "title": "Items"
+     },
+     "total": {
+      "type": "integer",
+      "title": "Total"
+     },
+     "page": {
+      "type": "integer",
+      "title": "Page"
+     },
+     "page_size": {
+      "type": "integer",
+      "title": "Page Size"
+     },
+     "unread": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unread"
+     }
+    },
+    "type": "object",
+    "required": [
+     "items",
+     "total",
+     "page",
+     "page_size"
+    ],
+    "title": "NotificationPage"
+   },
+   "OrderEvent": {
+    "properties": {
+     "event_key": {
+      "type": "string",
+      "maxLength": 120,
+      "minLength": 10,
+      "title": "Event Key"
+     },
+     "event": {
+      "type": "string",
+      "enum": [
+       "order_created",
+       "order_confirmed",
+       "order_completed",
+       "order_cancelled"
+      ],
+      "title": "Event"
+     },
+     "order_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Order Id"
+     },
+     "order_code": {
+      "type": "string",
+      "maxLength": 20,
+      "minLength": 1,
+      "title": "Order Code"
+     },
+     "student_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Student Id"
+     },
+     "owner_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Owner Id"
+     },
+     "restaurant_name": {
+      "type": "string",
+      "maxLength": 150,
+      "minLength": 1,
+      "title": "Restaurant Name"
+     },
+     "actor_role": {
+      "type": "string",
+      "enum": [
+       "sinh_vien",
+       "chu_quan",
+       "admin"
+      ],
+      "title": "Actor Role"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "event_key",
+     "event",
+     "order_id",
+     "order_code",
+     "student_id",
+     "owner_id",
+     "restaurant_name",
+     "actor_role"
+    ],
+    "title": "OrderEvent"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   }
+  },
+  "securitySchemes": {
+   "APIKeyHeader": {
+    "type": "apiKey",
+    "description": "Khóa nội bộ, chỉ dùng giữa các service",
+    "in": "header",
+    "name": "X-Internal-Key"
+   },
+   "HTTPBearer": {
+    "type": "http",
+    "description": "Token lấy từ POST /api/users/login của Auth Service",
+    "scheme": "bearer"
+   }
+  }
+ }
+}

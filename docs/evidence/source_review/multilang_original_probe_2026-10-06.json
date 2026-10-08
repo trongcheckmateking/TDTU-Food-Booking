@@ -1,0 +1,77 @@
+[
+ [
+  "Restaurant",
+  false,
+  "Tạo quán KHÔNG cần token, owner_id tự khai: HTTP 201"
+ ],
+ [
+  "Restaurant",
+  false,
+  "Xóa quán của người khác KHÔNG cần token: HTTP 200"
+ ],
+ [
+  "Order→Auth",
+  true,
+  "GET /api/users/me: id UUID=True, role 'sinh_vien' Order hiểu được"
+ ],
+ [
+  "Order→Restaurant",
+  true,
+  "GET /api/restaurants/{id}: HTTP 200, owner_id là UUID=True, status='open'"
+ ],
+ [
+  "Order→Restaurant",
+  false,
+  "Quán mẫu trong restaurants.json có owner_id='user-1' (Order sẽ trả 502 vì không phải UUID)"
+ ],
+ [
+  "Order→Restaurant",
+  false,
+  "GET /api/restaurants/{rid}/menu-items/{iid} (Order gọi để lấy giá món): HTTP 404 {\"message\":\"Không tìm thấy API.\"}"
+ ],
+ [
+  "Order→Notification",
+  false,
+  "Order POST http://localhost:8004/api/notifications, nhưng Notification chạy cổng 8080, đường dẫn /notifications (sai cả cổng lẫn đường dẫn; Order chỉ ghi log WARN nên lỗi bị im lặng)"
+ ],
+ [
+  "Order→Notification",
+  false,
+  "Kể cả sửa đúng địa chỉ: bảng notifications có FK sang bảng users/orders riêng của Notification (chỉ có 1 user mẫu) → mọi thông báo cho user thật lỗi FK → HTTP 500 (đã thử trên PostgreSQL)"
+ ],
+ [
+  "Review→Auth",
+  false,
+  "POST /api/reviews với token thật: HTTP 502 {\"error\":{\"code\":\"DEPENDENCY_CONTRACT_ERROR\",\"message\":\"API Auth/Order thiếu object data.\"}}"
+ ],
+ [
+  "Review→Auth",
+  false,
+  "Review đòi Auth trả {\"data\": {\"id\": <số nguyên>, \"role\": \"student\"}}, Auth thật trả id='fb418e11…' (UUID, không bọc data), role='sinh_vien'"
+ ],
+ [
+  "Review",
+  false,
+  "Gửi order_id dạng UUID (như Order thật sinh ra): HTTP 422 {\"error\":{\"code\":\"INVALID_ORDER_ID\",\"message\":\"order_id phải là số nguyên dương.\"}}"
+ ],
+ [
+  "Review",
+  false,
+  "Xem đánh giá theo restaurant_id UUID của Restaurant: HTTP 422 {\"error\":{\"code\":\"INVALID_QUERY\",\"message\":\"restaurant_id phải là số nguyên dương.\"}}"
+ ],
+ [
+  "CORS",
+  true,
+  "Auth: Access-Control-Allow-Origin = *"
+ ],
+ [
+  "CORS",
+  false,
+  "Restaurant: Access-Control-Allow-Origin = None"
+ ],
+ [
+  "CORS",
+  false,
+  "Review: Access-Control-Allow-Origin = None"
+ ]
+]

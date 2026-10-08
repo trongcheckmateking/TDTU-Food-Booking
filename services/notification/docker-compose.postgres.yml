@@ -1,0 +1,18 @@
+# PostgreSQL cho Notification Service (tùy chọn, nếu không muốn cài PostgreSQL trực tiếp).
+# Chạy từ thư mục gốc dự án, sau `python manage.py init-env`:
+#   docker compose -f services/notification/docker-compose.postgres.yml --env-file .env up -d
+# User/database khớp NOTIFICATION_DB_URL mặc định trong .env (tdtu_food / tdtu_notification).
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tdtu_food
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Thiếu POSTGRES_PASSWORD - chạy python manage.py init-env trước}
+      POSTGRES_DB: tdtu_notification
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - tdtu_notification_pg:/var/lib/postgresql/data
+volumes:
+  tdtu_notification_pg: {}

@@ -1,0 +1,1267 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Order Service",
+  "description": "Giỏ hàng → checkout → đơn hàng. Trạng thái: pending → confirmed → completed; pending/confirmed → cancelled.\n\nCài đặt: Java 17 + Spring Boot 3.5 + Spring Data JPA + H2.",
+  "version": "1.0.0",
+  "x-implementation": "Java 17 + Spring Boot 3.5 + Spring Data JPA + H2"
+ },
+ "paths": {
+  "/": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Thông tin service",
+    "operationId": "root__get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/health": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Readiness: service và DB sẵn sàng",
+    "operationId": "health_health_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cart": {
+   "get": {
+    "tags": [
+     "cart"
+    ],
+    "summary": "Xem giỏ hàng (giá và trạng thái món lấy trực tiếp từ Restaurant)",
+    "operationId": "view_cart_api_cart_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   },
+   "delete": {
+    "tags": [
+     "cart"
+    ],
+    "summary": "Xóa toàn bộ giỏ",
+    "operationId": "clear_cart_api_cart_delete",
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/api/cart/items": {
+   "post": {
+    "tags": [
+     "cart"
+    ],
+    "summary": "Thêm món vào giỏ (giỏ chỉ chứa món của 1 quán)",
+    "operationId": "add_to_cart_api_cart_items_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CartAdd"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/api/cart/items/{item_id}": {
+   "patch": {
+    "tags": [
+     "cart"
+    ],
+    "summary": "Đổi số lượng 1 món trong giỏ",
+    "operationId": "set_quantity_api_cart_items__item_id__patch",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "item_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Item Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CartQuantity"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "cart"
+    ],
+    "summary": "Xóa 1 món khỏi giỏ",
+    "operationId": "remove_item_api_cart_items__item_id__delete",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "item_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Item Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/orders/checkout": {
+   "post": {
+    "tags": [
+     "orders"
+    ],
+    "summary": "Đặt hàng từ giỏ. Gửi header Idempotency-Key để bấm lại/retry không tạo đơn trùng.",
+    "operationId": "checkout_api_orders_checkout_post",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "Idempotency-Key",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 100
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CheckoutIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrderOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/orders/me": {
+   "get": {
+    "tags": [
+     "orders"
+    ],
+    "summary": "Đơn của người đang đăng nhập",
+    "operationId": "my_orders_api_orders_me_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "pending",
+          "confirmed",
+          "completed",
+          "cancelled"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrderPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/orders/owner": {
+   "get": {
+    "tags": [
+     "orders"
+    ],
+    "summary": "Đơn của các quán thuộc chủ quán đang đăng nhập",
+    "operationId": "owner_orders_api_orders_owner_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "pending",
+          "confirmed",
+          "completed",
+          "cancelled"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "restaurant_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Restaurant Id"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrderPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/orders/{oid}": {
+   "get": {
+    "tags": [
+     "orders"
+    ],
+    "summary": "Chi tiết đơn (người đặt, chủ quán của đơn, admin)",
+    "operationId": "order_detail_api_orders__oid__get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "oid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Oid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrderOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/orders/{oid}/status": {
+   "patch": {
+    "tags": [
+     "orders"
+    ],
+    "summary": "Đổi trạng thái: chủ quán xác nhận/hoàn thành/hủy; sinh viên hủy khi pending; admin chỉ hủy",
+    "operationId": "update_status_api_orders__oid__status_patch",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "oid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Oid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/StatusUpdate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrderOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/orders": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Mọi đơn (admin) có bộ lọc",
+    "operationId": "admin_orders_api_admin_orders_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "pending",
+          "confirmed",
+          "completed",
+          "cancelled"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "restaurant_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Restaurant Id"
+      }
+     },
+     {
+      "name": "user_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "User Id"
+      }
+     },
+     {
+      "name": "date_from",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "YYYY-MM-DD (UTC)",
+       "title": "Date From"
+      },
+      "description": "YYYY-MM-DD (UTC)"
+     },
+     {
+      "name": "date_to",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Date To"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrderPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/orders/stats": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Thống kê đơn theo trạng thái, doanh thu",
+    "operationId": "admin_stats_api_admin_orders_stats_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/api/admin/outbox": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Sự kiện thông báo chờ gửi / gửi lỗi",
+    "operationId": "admin_outbox_api_admin_outbox_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "pending",
+          "sending",
+          "sent",
+          "failed"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/outbox/retry": {
+   "post": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Gửi lại ngay các thông báo lỗi",
+    "operationId": "admin_retry_api_admin_outbox_retry_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/internal/orders/{oid}": {
+   "get": {
+    "tags": [
+     "internal"
+    ],
+    "summary": "Chi tiết đơn cho service nội bộ (Review kiểm tra điều kiện đánh giá)",
+    "operationId": "internal_order_internal_orders__oid__get",
+    "security": [
+     {
+      "APIKeyHeader": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "oid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Oid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "CartAdd": {
+    "properties": {
+     "restaurant_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Restaurant Id"
+     },
+     "item_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Item Id"
+     },
+     "quantity": {
+      "type": "integer",
+      "maximum": 50.0,
+      "minimum": 1.0,
+      "title": "Quantity",
+      "default": 1
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "restaurant_id",
+     "item_id"
+    ],
+    "title": "CartAdd"
+   },
+   "CartQuantity": {
+    "properties": {
+     "quantity": {
+      "type": "integer",
+      "maximum": 50.0,
+      "minimum": 1.0,
+      "title": "Quantity"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "quantity"
+    ],
+    "title": "CartQuantity"
+   },
+   "CheckoutIn": {
+    "properties": {
+     "delivery_address": {
+      "type": "string",
+      "maxLength": 300,
+      "minLength": 3,
+      "title": "Delivery Address"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 500
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "delivery_address"
+    ],
+    "title": "CheckoutIn"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "OrderItemOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "item_id": {
+      "type": "string",
+      "title": "Item Id"
+     },
+     "item_name": {
+      "type": "string",
+      "title": "Item Name"
+     },
+     "quantity": {
+      "type": "integer",
+      "title": "Quantity"
+     },
+     "price": {
+      "type": "integer",
+      "title": "Price"
+     },
+     "line_total": {
+      "type": "integer",
+      "title": "Line Total"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "item_id",
+     "item_name",
+     "quantity",
+     "price",
+     "line_total"
+    ],
+    "title": "OrderItemOut"
+   },
+   "OrderOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "user_id": {
+      "type": "string",
+      "title": "User Id"
+     },
+     "customer_name": {
+      "type": "string",
+      "title": "Customer Name"
+     },
+     "customer_phone": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Customer Phone"
+     },
+     "restaurant_id": {
+      "type": "string",
+      "title": "Restaurant Id"
+     },
+     "restaurant_name": {
+      "type": "string",
+      "title": "Restaurant Name"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "pending",
+       "confirmed",
+       "completed",
+       "cancelled"
+      ],
+      "title": "Status"
+     },
+     "total_price": {
+      "type": "integer",
+      "title": "Total Price"
+     },
+     "delivery_address": {
+      "type": "string",
+      "title": "Delivery Address"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "cancel_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cancel Reason"
+     },
+     "cancelled_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cancelled By"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "updated_at": {
+      "type": "string",
+      "title": "Updated At"
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/OrderItemOut"
+      },
+      "type": "array",
+      "title": "Items"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "user_id",
+     "customer_name",
+     "restaurant_id",
+     "restaurant_name",
+     "status",
+     "total_price",
+     "delivery_address",
+     "created_at",
+     "updated_at",
+     "items"
+    ],
+    "title": "OrderOut"
+   },
+   "OrderPage": {
+    "properties": {
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/OrderOut"
+      },
+      "type": "array",
+      "title": "Items"
+     },
+     "total": {
+      "type": "integer",
+      "title": "Total"
+     },
+     "page": {
+      "type": "integer",
+      "title": "Page"
+     },
+     "page_size": {
+      "type": "integer",
+      "title": "Page Size"
+     }
+    },
+    "type": "object",
+    "required": [
+     "items",
+     "total",
+     "page",
+     "page_size"
+    ],
+    "title": "OrderPage"
+   },
+   "StatusUpdate": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "pending",
+       "confirmed",
+       "completed",
+       "cancelled"
+      ],
+      "title": "Status"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 300
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "status"
+    ],
+    "title": "StatusUpdate"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   }
+  },
+  "securitySchemes": {
+   "HTTPBearer": {
+    "type": "http",
+    "description": "Token lấy từ POST /api/users/login của Auth Service",
+    "scheme": "bearer"
+   },
+   "APIKeyHeader": {
+    "type": "apiKey",
+    "description": "Khóa nội bộ, chỉ dùng giữa các service",
+    "in": "header",
+    "name": "X-Internal-Key"
+   }
+  }
+ }
+}

@@ -1,0 +1,14 @@
+TÁI HIỆN JWT ký bằng secret mặc định trong mã được chấp nhận :: HTTP 200
+TÁI HIỆN Email chỉ khác hoa/thường đăng ký được 2 lần :: HTTP 201/201
+TÁI HIỆN Mật khẩu 30 ký tự 'ệ' (90 byte) gây lỗi 500 :: HTTP 500
+TÁI HIỆN Khách không đăng nhập xem được món ẩn qua ?all=true :: 2 món
+TÁI HIỆN Giá vô hạn (1e309) được chấp nhận :: HTTP 201 {"id":"2faa87e9-9d40-446b-8e55-9b469061a1c1","restaurant_id":"35ffda2f-af54-4300
+TÁI HIỆN Tên món chỉ có khoảng trắng được chấp nhận :: HTTP 201
+TÁI HIỆN Quán bị khóa vẫn xem chi tiết công khai :: HTTP 200
+TÁI HIỆN quantity=true được hiểu là 1 :: HTTP 201
+TÁI HIỆN order_items.item_name luôn null :: {"id": "c05706ee-a9ef-40ec-ba74-62034a7397b2", "order_id": "e61805db-e83d-4cb0-bb5f-8e6c2b
+TÁI HIỆN Admin được chuyển pending→confirmed (không chỉ hủy) :: HTTP 200
+TÁI HIỆN 2 request đổi trạng thái đồng thời cùng thành công :: mã [200, 200], trạng thái cuối completed
+TÁI HIỆN Sự kiện notification với quán không tồn tại gây 500 :: HTTP 500
+TÁI HIỆN Gửi lại cùng sự kiện tạo thông báo trùng :: HTTP 201/201
+TÁI HIỆN Khóa nội bộ mặc định 'tdtu-internal-key' dùng được :: 

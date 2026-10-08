@@ -1,0 +1,2578 @@
+{
+  "info": {
+    "name": "TDTU Food Booking",
+    "description": "Sinh từ OpenAPI bằng scripts/build_postman.py",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Luồng demo",
+      "item": [
+        {
+          "name": "1. Đăng nhập sinh viên",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/login",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{sv_email}}\",\n  \"password\": \"{{demo_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"đăng nhập 200\", () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set(\"token_sv\", pm.response.json().access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Đăng nhập chủ quán",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/login",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{owner_email}}\",\n  \"password\": \"{{demo_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"đăng nhập 200\", () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set(\"token_owner\", pm.response.json().access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Đăng nhập admin",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/login",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{admin_email}}\",\n  \"password\": \"{{admin_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"đăng nhập 200\", () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set(\"token_admin\", pm.response.json().access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Danh sách quán, chọn quán của chủ quán demo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants?q=Cơm Tấm",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "Cơm Tấm"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json().items.find(x => x.accepting_orders);",
+                  "pm.test(\"có quán đang nhận đơn\", () => pm.expect(r).to.be.ok);",
+                  "pm.collectionVariables.set(\"restaurant_id\", r.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Menu, chọn món còn bán",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants/{{restaurant_id}}/menu",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants",
+                "{{restaurant_id}}",
+                "menu"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const m = pm.response.json().find(x => x.status === \"available\");",
+                  "pm.test(\"có món còn bán\", () => pm.expect(m).to.be.ok);",
+                  "pm.collectionVariables.set(\"item_id\", m.id); pm.collectionVariables.set(\"item_price\", m.price);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Xóa giỏ cũ",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/cart",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "cart"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"204\", () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Thêm 2 phần vào giỏ",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/cart/items",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "cart",
+                "items"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"restaurant_id\": \"{{restaurant_id}}\",\n  \"item_id\": \"{{item_id}}\",\n  \"quantity\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"tạm tính = 2 x giá\", () => pm.expect(pm.response.json().total_price).to.eql(2 * Number(pm.collectionVariables.get(\"item_price\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8. Checkout (Idempotency-Key)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{checkout_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{order_url}}/api/orders/checkout",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "checkout"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delivery_address\": \"KTX TDTU, phòng B305\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"đơn pending, có ảnh chụp tên món\", () => { const o = pm.response.json();",
+                  "  pm.expect(o.status).to.eql(\"pending\"); pm.expect(o.items[0].item_name).to.be.a(\"string\"); });",
+                  "pm.collectionVariables.set(\"order_id\", pm.response.json().id);"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"checkout_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9. Gửi lại cùng Idempotency-Key -> cùng đơn",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{checkout_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{order_url}}/api/orders/checkout",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "checkout"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delivery_address\": \"KTX TDTU, phòng B305\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 replay\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"cùng đơn\", () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"order_id\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10. Chủ quán xác nhận",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/status",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "status"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"confirmed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11. Chủ quán hoàn thành",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/status",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "status"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"completed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "12. Sinh viên xem thông báo chưa đọc",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/notifications/me?status=unread",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "me"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "unread"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"có thông báo hoàn thành\", () => pm.expect(pm.response.json().items.some(n => n.type === \"order_completed\")).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "13. Sinh viên đánh giá",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/reviews",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_id\": \"{{order_id}}\",\n  \"rating\": 5,\n  \"comment\": \"Ngon, giao nhanh\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "14. Điểm trung bình quán",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/reviews/restaurant/{{restaurant_id}}/summary",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                "restaurant",
+                "{{restaurant_id}}",
+                "summary"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"có điểm\", () => pm.expect(pm.response.json().count).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "15. Admin thống kê",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/admin/orders/stats",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "orders",
+                "stats"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "16. Không có token -> 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/me",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"mã lỗi\", () => pm.expect(pm.response.json().code).to.eql(\"UNAUTHORIZED\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Auth Service",
+      "item": [
+        {
+          "name": "GET / – Thông tin service",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": []
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /health – Readiness: service và DB sẵn sàng",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/health",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/register – Đăng ký tài khoản sinh viên hoặc chủ quán",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/register",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "register"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"email\": \"sv.moi@student.tdtu.edu.vn\",\n  \"password\": \"matkhau123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/login – Đăng nhập, nhận access_token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/login",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"sv.moi@student.tdtu.edu.vn\",\n  \"password\": \"matkhau123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/users/me – Hồ sơ người đang đăng nhập (các service khác gọi API này để xác thực)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/me",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/users/me – Cập nhật họ tên, số điện thoại",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/me",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"phone\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/logout – Đăng xuất: thu hồi mọi token hiện có của tài khoản",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/logout",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "logout"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/users – Danh sách tài khoản (admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/users/{user_id} – Chi tiết tài khoản (admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/{{user_id}}",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "{{user_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/users/{user_id}/role – Đổi vai trò (admin). Token cũ của tài khoản bị thu hồi.",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/{{user_id}}/role",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "{{user_id}}",
+                "role"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"sinh_vien\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/users/{user_id}/status – Khóa / mở khóa tài khoản (admin). Khóa = vô hiệu hóa, giữ nguyên lịch sử đơn.",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/{{user_id}}/status",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "{{user_id}}",
+                "status"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"cancelled\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Restaurant Service",
+      "item": [
+        {
+          "name": "GET / – Thông tin service",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": []
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /health – Readiness: service và DB sẵn sàng",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/health",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /api/restaurants – Danh sách quán công khai (active, closed), tìm theo tên/địa chỉ",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/restaurants – Chủ quán tạo quán mới (trạng thái pending, chờ admin duyệt)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"address\": \"19 Nguyễn Hữu Thọ, Q7\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/restaurants/mine – Các quán của chủ quán đang đăng nhập",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants/mine",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants",
+                "mine"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/restaurants/{rid} – Chi tiết quán (quán pending/locked chỉ chủ quán và admin xem được)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants/{{restaurant_id}}",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants",
+                "{{restaurant_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/restaurants/{rid} – Chủ quán sửa thông tin, mở/tạm đóng quán (active ↔ closed)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants/{{restaurant_id}}",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants",
+                "{{restaurant_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"address\": \"19 Nguyễn Hữu Thọ, Q7\",\n  \"description\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/restaurants/{rid} – Xóa mềm quán (chủ quán hoặc admin). Lịch sử đơn không bị ảnh hưởng.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants/{{restaurant_id}}",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants",
+                "{{restaurant_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/restaurants/{rid}/menu – Menu của quán. Khách thấy món available/sold_out; all=true (chủ quán, admin) thấy cả món ẩn",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants/{{restaurant_id}}/menu",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants",
+                "{{restaurant_id}}",
+                "menu"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/restaurants/{rid}/menu – Chủ quán thêm món",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/restaurants/{{restaurant_id}}/menu",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "restaurants",
+                "{{restaurant_id}}",
+                "menu"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"price\": 30000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/menu-items/{mid} – Chi tiết 1 món",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/menu-items/{{{item_id}}}",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "menu-items",
+                "{{{item_id}}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/menu-items/{mid} – Chủ quán sửa món: giá, mô tả, trạng thái (available / sold_out / hidden)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/menu-items/{{{item_id}}}",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "menu-items",
+                "{{{item_id}}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"price\": 30000,\n  \"description\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/menu-items/{mid} – Xóa mềm món",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/menu-items/{{{item_id}}}",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "menu-items",
+                "{{{item_id}}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/admin/restaurants – Mọi quán (admin), lọc theo trạng thái; include_deleted để xem cả quán đã xóa",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/admin/restaurants",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "restaurants"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/admin/restaurants/{rid}/status – Duyệt (pending→active), khóa (→locked), mở khóa (locked→active)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/admin/restaurants/{{restaurant_id}}/status",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "restaurants",
+                "{{restaurant_id}}",
+                "status"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"cancelled\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /internal/quote – Báo giá cho Order: kiểm tra quán nhận đơn, từng món thuộc quán, còn bán, giá hiện tại",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurant_url}}/internal/quote",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "internal",
+                "quote"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"restaurant_id\": \"{{restaurant_id}}\",\n  \"items\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /internal/owners/{owner_id}/restaurant-count – Số quán (chưa xóa) của 1 chủ quán, Auth dùng trước khi đổi vai trò",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurant_url}}/internal/owners/{{user_id}}/restaurant-count",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "internal",
+                "owners",
+                "{{user_id}}",
+                "restaurant-count"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Order Service",
+      "item": [
+        {
+          "name": "GET / – Thông tin service",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": []
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /health – Readiness: service và DB sẵn sàng",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/health",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /api/cart – Xem giỏ hàng (giá và trạng thái món lấy trực tiếp từ Restaurant)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/cart",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "cart"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/cart – Xóa toàn bộ giỏ",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/cart",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "cart"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/cart/items – Thêm món vào giỏ (giỏ chỉ chứa món của 1 quán)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/cart/items",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "cart",
+                "items"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"restaurant_id\": \"{{restaurant_id}}\",\n  \"item_id\": \"{{item_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/cart/items/{item_id} – Đổi số lượng 1 món trong giỏ",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/cart/items/{{item_id}}",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "cart",
+                "items",
+                "{{item_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/cart/items/{item_id} – Xóa 1 món khỏi giỏ",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/cart/items/{{item_id}}",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "cart",
+                "items",
+                "{{item_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/orders/checkout – Đặt hàng từ giỏ. Gửi header Idempotency-Key để bấm lại/retry không tạo đơn trùng.",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/checkout",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "checkout"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delivery_address\": \"KTX TDTU, phòng B305\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/orders/me – Đơn của người đang đăng nhập",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/me",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/orders/owner – Đơn của các quán thuộc chủ quán đang đăng nhập",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/owner",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "owner"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/orders/{oid} – Chi tiết đơn (người đặt, chủ quán của đơn, admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/orders/{oid}/status – Đổi trạng thái: chủ quán xác nhận/hoàn thành/hủy; sinh viên hủy khi pending; admin chỉ hủy",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/status",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "status"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"cancelled\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/admin/orders – Mọi đơn (admin) có bộ lọc",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/admin/orders",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "orders"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/admin/orders/stats – Thống kê đơn theo trạng thái, doanh thu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/admin/orders/stats",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "orders",
+                "stats"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/admin/outbox – Sự kiện thông báo chờ gửi / gửi lỗi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/admin/outbox",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "outbox"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/admin/outbox/retry – Gửi lại ngay các thông báo lỗi",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/admin/outbox/retry",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "outbox",
+                "retry"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /internal/orders/{oid} – Chi tiết đơn cho service nội bộ (Review kiểm tra điều kiện đánh giá)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{order_url}}/internal/orders/{{order_id}}",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "internal",
+                "orders",
+                "{{order_id}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Notification Service",
+      "item": [
+        {
+          "name": "GET / – Thông tin service",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": []
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /health – Readiness: service và DB sẵn sàng",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/health",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /internal/notifications/events – Order Service gửi sự kiện đơn hàng (idempotent theo event_key)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notification_url}}/internal/notifications/events",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "internal",
+                "notifications",
+                "events"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event_key\": \"giá trị\",\n  \"event\": \"giá trị\",\n  \"order_id\": \"{{order_id}}\",\n  \"order_code\": \"giá trị\",\n  \"student_id\": \"giá trị\",\n  \"owner_id\": \"giá trị\",\n  \"restaurant_name\": \"giá trị\",\n  \"actor_role\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/notifications/me – Thông báo của tôi; status=unread để lọc chưa đọc",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/notifications/me",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/notifications/me/read-all – Đánh dấu tất cả đã đọc",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/notifications/me/read-all",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "me",
+                "read-all"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/notifications/{nid}/read – Đánh dấu 1 thông báo của mình là đã đọc",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/notifications/{{notification_id}}/read",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "{{notification_id}}",
+                "read"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/admin/notifications – Mọi thông báo (admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/admin/notifications",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "notifications"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/admin/notifications/{nid} – Xóa 1 thông báo (admin)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/admin/notifications/{{notification_id}}",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "notifications",
+                "{{notification_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Review Service",
+      "item": [
+        {
+          "name": "GET / – Thông tin service",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": []
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /health – Readiness: service và DB sẵn sàng",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/health",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /api/reviews – Sinh viên đánh giá đơn đã hoàn thành của mình",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/reviews",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_id\": \"{{order_id}}\",\n  \"rating\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/reviews/me – Đánh giá tôi đã viết",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/reviews/me",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/reviews/summary – Điểm trung bình của nhiều quán một lần (restaurant_ids cách nhau bằng dấu phẩy, tối đa 50)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/reviews/summary",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                "summary"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/reviews/restaurant/{rid} – Đánh giá công khai của quán (phân trang, không lộ đơn hàng/người dùng)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/reviews/restaurant/{{restaurant_id}}",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                "restaurant",
+                "{{restaurant_id}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/reviews/restaurant/{rid}/summary – Điểm trung bình, số lượt và phân bố sao của quán",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/reviews/restaurant/{{restaurant_id}}/summary",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                "restaurant",
+                "{{restaurant_id}}",
+                "summary"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/admin/reviews – Mọi đánh giá (admin), lọc theo trạng thái, số sao tối đa",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/admin/reviews",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "reviews"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/admin/reviews/{review_id}/status – Ẩn / hiện lại đánh giá vi phạm (admin). Không xóa cứng để đơn không bị đánh giá lại.",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{review_url}}/api/admin/reviews/{{review_id}}/status",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "reviews",
+                "{{review_id}}",
+                "status"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"cancelled\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "token_sv",
+      "value": ""
+    },
+    {
+      "key": "token_owner",
+      "value": ""
+    },
+    {
+      "key": "token_admin",
+      "value": ""
+    },
+    {
+      "key": "restaurant_id",
+      "value": ""
+    },
+    {
+      "key": "item_id",
+      "value": ""
+    },
+    {
+      "key": "item_price",
+      "value": ""
+    },
+    {
+      "key": "order_id",
+      "value": ""
+    },
+    {
+      "key": "checkout_key",
+      "value": ""
+    },
+    {
+      "key": "user_id",
+      "value": ""
+    },
+    {
+      "key": "notification_id",
+      "value": ""
+    },
+    {
+      "key": "review_id",
+      "value": ""
+    }
+  ]
+}

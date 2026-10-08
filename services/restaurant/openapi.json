@@ -1,0 +1,1545 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Restaurant Service",
+  "description": "Quản lý quán ăn và menu. Quán mới ở trạng thái `pending` chờ admin duyệt.\n\nCài đặt: Node.js 22 + Express 5 + SQLite (node:sqlite).",
+  "version": "1.0.0",
+  "x-implementation": "Node.js 22 + Express 5 + SQLite (node:sqlite)"
+ },
+ "paths": {
+  "/": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Thông tin service",
+    "operationId": "root__get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/health": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Readiness: service và DB sẵn sàng",
+    "operationId": "health_health_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/restaurants": {
+   "get": {
+    "tags": [
+     "restaurants"
+    ],
+    "summary": "Danh sách quán công khai (active, closed), tìm theo tên/địa chỉ",
+    "operationId": "list_restaurants_api_restaurants_get",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 100
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RestaurantPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "owner"
+    ],
+    "summary": "Chủ quán tạo quán mới (trạng thái pending, chờ admin duyệt)",
+    "operationId": "create_restaurant_api_restaurants_post",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RestaurantCreate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RestaurantOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/restaurants/mine": {
+   "get": {
+    "tags": [
+     "owner"
+    ],
+    "summary": "Các quán của chủ quán đang đăng nhập",
+    "operationId": "my_restaurants_api_restaurants_mine_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/RestaurantOut"
+         },
+         "type": "array",
+         "title": "Response My Restaurants Api Restaurants Mine Get"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/api/restaurants/{rid}": {
+   "get": {
+    "tags": [
+     "restaurants"
+    ],
+    "summary": "Chi tiết quán (quán pending/locked chỉ chủ quán và admin xem được)",
+    "operationId": "restaurant_detail_api_restaurants__rid__get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RestaurantOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "patch": {
+    "tags": [
+     "owner"
+    ],
+    "summary": "Chủ quán sửa thông tin, mở/tạm đóng quán (active ↔ closed)",
+    "operationId": "update_restaurant_api_restaurants__rid__patch",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RestaurantUpdate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RestaurantOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "owner"
+    ],
+    "summary": "Xóa mềm quán (chủ quán hoặc admin). Lịch sử đơn không bị ảnh hưởng.",
+    "operationId": "delete_restaurant_api_restaurants__rid__delete",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/restaurants/{rid}/menu": {
+   "get": {
+    "tags": [
+     "restaurants"
+    ],
+    "summary": "Menu của quán. Khách thấy món available/sold_out; all=true (chủ quán, admin) thấy cả món ẩn",
+    "operationId": "get_menu_api_restaurants__rid__menu_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     },
+     {
+      "name": "all",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "All"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/MenuItemOut"
+         },
+         "title": "Response Get Menu Api Restaurants  Rid  Menu Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "owner"
+    ],
+    "summary": "Chủ quán thêm món",
+    "operationId": "add_menu_item_api_restaurants__rid__menu_post",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MenuItemCreate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MenuItemOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/menu-items/{mid}": {
+   "get": {
+    "tags": [
+     "restaurants"
+    ],
+    "summary": "Chi tiết 1 món",
+    "operationId": "menu_item_detail_api_menu_items__mid__get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "mid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Mid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MenuItemOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "patch": {
+    "tags": [
+     "owner"
+    ],
+    "summary": "Chủ quán sửa món: giá, mô tả, trạng thái (available / sold_out / hidden)",
+    "operationId": "update_menu_item_api_menu_items__mid__patch",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "mid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Mid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MenuItemUpdate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MenuItemOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "owner"
+    ],
+    "summary": "Xóa mềm món",
+    "operationId": "delete_menu_item_api_menu_items__mid__delete",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "mid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Mid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/restaurants": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Mọi quán (admin), lọc theo trạng thái; include_deleted để xem cả quán đã xóa",
+    "operationId": "admin_list_api_admin_restaurants_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "pending",
+          "active",
+          "closed",
+          "locked"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 100
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "name": "include_deleted",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "Include Deleted"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RestaurantPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/restaurants/{rid}/status": {
+   "patch": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Duyệt (pending→active), khóa (→locked), mở khóa (locked→active)",
+    "operationId": "admin_set_status_api_admin_restaurants__rid__status_patch",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AdminStatusUpdate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RestaurantOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/quote": {
+   "post": {
+    "tags": [
+     "internal"
+    ],
+    "summary": "Báo giá cho Order: kiểm tra quán nhận đơn, từng món thuộc quán, còn bán, giá hiện tại",
+    "operationId": "internal_quote_internal_quote_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/QuoteIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "APIKeyHeader": []
+     }
+    ]
+   }
+  },
+  "/internal/owners/{owner_id}/restaurant-count": {
+   "get": {
+    "tags": [
+     "internal"
+    ],
+    "summary": "Số quán (chưa xóa) của 1 chủ quán, Auth dùng trước khi đổi vai trò",
+    "operationId": "internal_owner_count_internal_owners__owner_id__restaurant_count_get",
+    "security": [
+     {
+      "APIKeyHeader": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "owner_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Owner Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "AdminStatusUpdate": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "active",
+       "locked"
+      ],
+      "title": "Status",
+      "description": "active = duyệt / mở khóa; locked = khóa / từ chối"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 300
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "status"
+    ],
+    "title": "AdminStatusUpdate"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "MenuItemCreate": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 150,
+      "minLength": 1,
+      "title": "Name"
+     },
+     "price": {
+      "type": "integer",
+      "maximum": 100000000.0,
+      "minimum": 0.0,
+      "title": "Price"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 1000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "image_url": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 500
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Image Url"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "available",
+       "sold_out",
+       "hidden"
+      ],
+      "title": "Status",
+      "default": "available"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "name",
+     "price"
+    ],
+    "title": "MenuItemCreate"
+   },
+   "MenuItemOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "restaurant_id": {
+      "type": "string",
+      "title": "Restaurant Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "price": {
+      "type": "integer",
+      "title": "Price"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "image_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Image Url"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "available",
+       "sold_out",
+       "hidden"
+      ],
+      "title": "Status"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "updated_at": {
+      "type": "string",
+      "title": "Updated At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "restaurant_id",
+     "name",
+     "price",
+     "status",
+     "created_at",
+     "updated_at"
+    ],
+    "title": "MenuItemOut"
+   },
+   "MenuItemUpdate": {
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 150,
+        "minLength": 1
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "price": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 100000000.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Price"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 1000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "image_url": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 500
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Image Url"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "available",
+         "sold_out",
+         "hidden"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Status"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "title": "MenuItemUpdate",
+    "description": "Không cho đổi restaurant_id: món không thể bị chuyển sang quán khác."
+   },
+   "QuoteIn": {
+    "properties": {
+     "restaurant_id": {
+      "type": "string",
+      "title": "Restaurant Id"
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/QuoteLine"
+      },
+      "type": "array",
+      "maxItems": 50,
+      "minItems": 1,
+      "title": "Items"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "restaurant_id",
+     "items"
+    ],
+    "title": "QuoteIn"
+   },
+   "QuoteLine": {
+    "properties": {
+     "item_id": {
+      "type": "string",
+      "title": "Item Id"
+     },
+     "quantity": {
+      "type": "integer",
+      "maximum": 50.0,
+      "minimum": 1.0,
+      "title": "Quantity"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "item_id",
+     "quantity"
+    ],
+    "title": "QuoteLine"
+   },
+   "RestaurantCreate": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 150,
+      "minLength": 2,
+      "title": "Name"
+     },
+     "address": {
+      "type": "string",
+      "maxLength": 300,
+      "minLength": 3,
+      "title": "Address"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 1000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "open_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Time"
+     },
+     "close_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Close Time"
+     },
+     "image_url": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 500
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Image Url"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "name",
+     "address"
+    ],
+    "title": "RestaurantCreate"
+   },
+   "RestaurantOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "owner_id": {
+      "type": "string",
+      "title": "Owner Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "address": {
+      "type": "string",
+      "title": "Address"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "open_time": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Time"
+     },
+     "close_time": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Close Time"
+     },
+     "image_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Image Url"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "pending",
+       "active",
+       "closed",
+       "locked"
+      ],
+      "title": "Status"
+     },
+     "status_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Status Reason"
+     },
+     "accepting_orders": {
+      "type": "boolean",
+      "title": "Accepting Orders"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "updated_at": {
+      "type": "string",
+      "title": "Updated At"
+     },
+     "deleted_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Deleted At"
+     },
+     "item_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Item Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "owner_id",
+     "name",
+     "address",
+     "status",
+     "accepting_orders",
+     "created_at",
+     "updated_at"
+    ],
+    "title": "RestaurantOut"
+   },
+   "RestaurantPage": {
+    "properties": {
+     "total": {
+      "type": "integer",
+      "title": "Total"
+     },
+     "page": {
+      "type": "integer",
+      "title": "Page"
+     },
+     "page_size": {
+      "type": "integer",
+      "title": "Page Size"
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/RestaurantOut"
+      },
+      "type": "array",
+      "title": "Items"
+     }
+    },
+    "type": "object",
+    "required": [
+     "total",
+     "page",
+     "page_size",
+     "items"
+    ],
+    "title": "RestaurantPage"
+   },
+   "RestaurantUpdate": {
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 150,
+        "minLength": 2
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "address": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 300,
+        "minLength": 3
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Address"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 1000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "open_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Time"
+     },
+     "close_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Close Time"
+     },
+     "image_url": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 500
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Image Url"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "active",
+         "closed"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Status",
+      "description": "Chủ quán chỉ chuyển active ↔ closed"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "title": "RestaurantUpdate"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   }
+  },
+  "securitySchemes": {
+   "HTTPBearer": {
+    "type": "http",
+    "description": "Token lấy từ POST /api/users/login của Auth Service",
+    "scheme": "bearer"
+   },
+   "APIKeyHeader": {
+    "type": "apiKey",
+    "description": "Khóa nội bộ, chỉ dùng giữa các service",
+    "in": "header",
+    "name": "X-Internal-Key"
+   }
+  }
+ }
+}

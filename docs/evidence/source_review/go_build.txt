@@ -1,0 +1,7 @@
+Lệnh: GOTOOLCHAIN=local GOPROXY=direct go build ./...   (Go 1.24.7 có sẵn trong môi trường kiểm thử)
+Kết quả: không build được bản gốc.
+- go.mod yêu cầu go 1.26.0; tải toolchain từ proxy.golang.org bị chặn (403, môi trường kiểm thử).
+- gorm.io bị chặn khi tải trực tiếp (connect_rejected).
+Ghi chú: phần lỗi khóa ngoại của init.sql được tái hiện riêng trên PostgreSQL 16 bằng chính init.sql gốc:
+  INSERT notification cho user mẫu có trong init.sql -> thành công
+  INSERT notification cho user UUID thật -> ERROR: violates foreign key constraint "notifications_user_id_fkey"

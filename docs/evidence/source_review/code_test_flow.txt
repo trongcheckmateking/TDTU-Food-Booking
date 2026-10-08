@@ -1,0 +1,37 @@
+1. Auth Service
+  ok - token sinh viên hợp lệ
+  ok - token sai trả 401
+  ok - dữ liệu đăng ký sai bị từ chối
+2. Restaurant Service
+  ok - sinh viên không được tạo quán
+  ok - thêm 3 món vào menu
+  ok - sửa giá món
+3. Order Service
+  ok - tạo đơn pending, tổng 76.000
+  ok - thêm món vào giỏ, tổng 104.000
+  ok - sinh viên không tự hoàn thành đơn
+  ok - chủ quán xác nhận đơn
+  ok - chặn chuyển trạng thái ngược
+  ok - xem danh sách đơn của sinh viên
+  ok - sinh viên hủy đơn pending
+4. Notification Service
+  ok - chủ quán nhận thông báo đơn mới
+  ok - sinh viên nhận thông báo xác nhận + hoàn thành
+  ok - đánh dấu đã đọc
+5. Review Service
+  ok - không đánh giá đơn chưa hoàn thành
+  ok - đánh giá đơn đã hoàn thành
+  ok - không đánh giá 2 lần
+  ok - điểm trung bình 4.0
+6. API Admin
+  ok - sinh viên không gọi được API admin
+  ok - admin xem danh sách user
+  ok - admin xem danh sách quán
+  ok - admin thống kê đơn
+  ok - admin xem thông báo
+  ok - admin xem đánh giá
+  ok - admin khóa quán
+  ok - không đặt được món ở quán bị khóa
+
+Tất cả 28 kiểm tra đều đạt.
+exit 0

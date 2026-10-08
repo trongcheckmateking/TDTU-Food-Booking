@@ -1,0 +1,24 @@
+PASS Empty restaurant: count 0, average null
+PASS Missing and invalid token rejected
+PASS Restaurant owner cannot review
+PASS Auth unavailable and invalid contract
+PASS Malformed JSON, JSON array and wrong content type
+PASS Rating must be integer from 1 to 5
+PASS Reject forged user, restaurant and status
+PASS Validate order ID and Vietnamese comment length
+PASS Only completed orders allowed
+PASS Reject another student order
+PASS Missing order returns 404
+PASS Order outage and malformed contract rejected
+PASS Failed requests have not inserted any review
+PASS Create review, server-owned IDs, UTC ISO 8601, Vietnamese
+PASS One review per order
+PASS Second order allowed and average is 4.5
+PASS Restaurant filter, pagination, stable order, hide order_id
+PASS Validate query, pagination bounds and injection input
+PASS Empty list remains JSON array
+PASS Unknown endpoint and unsupported method
+PASS Database constraints enforce unique order and rating
+PASS Order timeout rejects write
+Result: 22 passed; report: <thư mục tạm>
+exit 0

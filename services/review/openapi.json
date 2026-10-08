@@ -1,0 +1,763 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Review Service",
+  "description": "Đánh giá và chấm sao quán sau khi đơn hoàn thành.\n\nCài đặt: PHP 8 (không framework) + PDO SQLite.",
+  "version": "1.0.0",
+  "x-implementation": "PHP 8 (không framework) + PDO SQLite"
+ },
+ "paths": {
+  "/": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Thông tin service",
+    "operationId": "root__get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/health": {
+   "get": {
+    "tags": [
+     "health"
+    ],
+    "summary": "Readiness: service và DB sẵn sàng",
+    "operationId": "health_health_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/reviews": {
+   "post": {
+    "tags": [
+     "reviews"
+    ],
+    "summary": "Sinh viên đánh giá đơn đã hoàn thành của mình",
+    "operationId": "create_review_api_reviews_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReviewIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MyReview"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/api/reviews/me": {
+   "get": {
+    "tags": [
+     "reviews"
+    ],
+    "summary": "Đánh giá tôi đã viết",
+    "operationId": "my_reviews_api_reviews_me_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/MyReview"
+         },
+         "type": "array",
+         "title": "Response My Reviews Api Reviews Me Get"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ]
+   }
+  },
+  "/api/reviews/summary": {
+   "get": {
+    "tags": [
+     "reviews"
+    ],
+    "summary": "Điểm trung bình của nhiều quán một lần (restaurant_ids cách nhau bằng dấu phẩy, tối đa 50)",
+    "operationId": "summaries_api_reviews_summary_get",
+    "parameters": [
+     {
+      "name": "restaurant_ids",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "maxLength": 2000,
+       "title": "Restaurant Ids"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/Summary"
+         },
+         "title": "Response Summaries Api Reviews Summary Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/reviews/restaurant/{rid}": {
+   "get": {
+    "tags": [
+     "reviews"
+    ],
+    "summary": "Đánh giá công khai của quán (phân trang, không lộ đơn hàng/người dùng)",
+    "operationId": "restaurant_reviews_api_reviews_restaurant__rid__get",
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 10,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/reviews/restaurant/{rid}/summary": {
+   "get": {
+    "tags": [
+     "reviews"
+    ],
+    "summary": "Điểm trung bình, số lượt và phân bố sao của quán",
+    "operationId": "restaurant_summary_api_reviews_restaurant__rid__summary_get",
+    "parameters": [
+     {
+      "name": "rid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Rid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Summary"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/reviews": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Mọi đánh giá (admin), lọc theo trạng thái, số sao tối đa",
+    "operationId": "admin_reviews_api_admin_reviews_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "visible",
+          "hidden"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "max_rating",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 5,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Max Rating"
+      }
+     },
+     {
+      "name": "restaurant_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Restaurant Id"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100000,
+       "minimum": 1,
+       "description": "Trang, bắt đầu từ 1",
+       "default": 1,
+       "title": "Page"
+      },
+      "description": "Trang, bắt đầu từ 1"
+     },
+     {
+      "name": "page_size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "description": "Số mục mỗi trang (1–100)",
+       "default": 20,
+       "title": "Page Size"
+      },
+      "description": "Số mục mỗi trang (1–100)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/reviews/{review_id}/status": {
+   "patch": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Ẩn / hiện lại đánh giá vi phạm (admin). Không xóa cứng để đơn không bị đánh giá lại.",
+    "operationId": "admin_visibility_api_admin_reviews__review_id__status_patch",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "review_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Review Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/VisibilityUpdate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AdminReview"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "AdminReview": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "reviewer_name": {
+      "type": "string",
+      "title": "Reviewer Name"
+     },
+     "rating": {
+      "type": "integer",
+      "title": "Rating"
+     },
+     "comment": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Comment"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "order_id": {
+      "type": "string",
+      "title": "Order Id"
+     },
+     "restaurant_id": {
+      "type": "string",
+      "title": "Restaurant Id"
+     },
+     "restaurant_name": {
+      "type": "string",
+      "title": "Restaurant Name"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "user_id": {
+      "type": "string",
+      "title": "User Id"
+     },
+     "hidden_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hidden Reason"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "reviewer_name",
+     "rating",
+     "comment",
+     "created_at",
+     "order_id",
+     "restaurant_id",
+     "restaurant_name",
+     "status",
+     "user_id"
+    ],
+    "title": "AdminReview"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "MyReview": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "reviewer_name": {
+      "type": "string",
+      "title": "Reviewer Name"
+     },
+     "rating": {
+      "type": "integer",
+      "title": "Rating"
+     },
+     "comment": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Comment"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "order_id": {
+      "type": "string",
+      "title": "Order Id"
+     },
+     "restaurant_id": {
+      "type": "string",
+      "title": "Restaurant Id"
+     },
+     "restaurant_name": {
+      "type": "string",
+      "title": "Restaurant Name"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "reviewer_name",
+     "rating",
+     "comment",
+     "created_at",
+     "order_id",
+     "restaurant_id",
+     "restaurant_name",
+     "status"
+    ],
+    "title": "MyReview"
+   },
+   "ReviewIn": {
+    "properties": {
+     "order_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Order Id"
+     },
+     "rating": {
+      "type": "integer",
+      "maximum": 5.0,
+      "minimum": 1.0,
+      "title": "Rating"
+     },
+     "comment": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 1000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Comment"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "order_id",
+     "rating"
+    ],
+    "title": "ReviewIn"
+   },
+   "Summary": {
+    "properties": {
+     "restaurant_id": {
+      "type": "string",
+      "title": "Restaurant Id"
+     },
+     "average": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Average"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     },
+     "distribution": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Distribution"
+     }
+    },
+    "type": "object",
+    "required": [
+     "restaurant_id",
+     "average",
+     "count",
+     "distribution"
+    ],
+    "title": "Summary"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   },
+   "VisibilityUpdate": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "visible",
+       "hidden"
+      ],
+      "title": "Status"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 300
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "status"
+    ],
+    "title": "VisibilityUpdate"
+   }
+  },
+  "securitySchemes": {
+   "HTTPBearer": {
+    "type": "http",
+    "description": "Token lấy từ POST /api/users/login của Auth Service",
+    "scheme": "bearer"
+   }
+  }
+ }
+}
