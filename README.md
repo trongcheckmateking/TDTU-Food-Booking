@@ -27,8 +27,11 @@ TDTU_FoodBooking_Final/
 │   ├── order/              # Java/Spring Boot: giỏ, đơn, outbox        (src/main, src/test, pom.xml, mvnw)
 │   ├── notification/       # Go/Gin/GORM: thông báo                   (*.go, go.mod, docker-compose.postgres.yml)
 │   └── review/             # PHP: đánh giá                            (public/index.php, src/, tests/)
-├── web/                    # :8000 giao diện (server.py + static/)
-├── scripts/                # seed_data.py (seed qua API), smoke_test.py, build_postman.py, gen_api_md.py, package_release.py
+├── image/logo/logo.png     # logo dự án (bản gốc, nền trong suốt)
+├── web/                    # :8000 giao diện (server.py: trang tĩnh, /config.js, mã QR /qr/*.svg; static/: trang, qr.html, logo, font)
+├── scripts/                # seed_data.py (seed qua API), backup.py (sao lưu / khôi phục), smoke_test.py, build_postman.py, ...
+├── docker-compose.yml      # chạy cả hệ thống bằng Docker: 5 service + web + PostgreSQL + gateway HTTPS + sao lưu
+├── deploy/                 # gateway/ (Nginx: HTTPS, /svc/<service>/, chặn /internal), backup/ (container sao lưu)
 ├── tests/                  # unit, integration (5 tiến trình thật), e2e (manage.py), ui (Playwright)
 └── docs/                   # tài liệu, OpenAPI, Postman, sơ đồ, báo cáo kiểm thử
 ```
@@ -109,6 +112,113 @@ Chạy riêng một service (khi phát triển): xem lệnh trong `docs/ARCHITEC
 Health/readiness: `GET /health` ở mỗi service (kiểm tra cả kết nối CSDL). Log: thư mục `logs/`.
 Trang `/docs` của Restaurant, Order, Notification, Review tải Swagger UI từ CDN (cần Internet); `/openapi.json` luôn dùng được.
 
+## Giao diện, bảng tin món mới và mã QR
+
+- **Nhận diện:** tông ấm "quán gỗ": nền be giấy dó `#F5EFE5`, thẻ kem `#FFFCF7`, gỗ óc chó `#3B2A1E` cho menu admin và Bảng tin
+  món mới; xanh `#15489D` / đỏ `#ED252A` và nét nghiêng của logo TĐT cho nút chính, bảng hiệu quán, điểm nhấn (mọi cặp chữ / nền
+  đạt tương phản WCAG AA). Logo dự án là đầu bếp đang chạy mang khay
+  có logo TĐT: bản gốc độ phân giải cao ở `image/logo/logo.png` (nền trong suốt), bản dùng trên web
+  `web/static/assets/brand/logo.png`, favicon `web/static/assets/favicon.png`. Logo gốc của trường (`brand/tdtu-logo.png`,
+  tải từ tdtu.edu.vn) đặt nguyên vẹn ở chân trang kèm ghi chú "đồ án sinh viên, không phải ứng dụng chính thức". Font
+  Be Vietnam Pro (SIL OFL) đóng gói trong `assets/fonts/`, chạy được khi không có Internet.
+- **Bảng tin món mới:** chủ quán thêm món, đổi giá hoặc bán lại món đã hết thì tin tự hiện ở trang giới thiệu (kèm bảng
+  LED chạy chữ) và đầu trang sinh viên. API: `GET :8002/api/menu-updates?limit=` (công khai, xem `docs/API.md`).
+- **Mã QR:** `/qr/sinh-vien.svg` và `/qr/chu-quan.svg` mở thẳng form đăng ký với vai trò chọn sẵn
+  (`index.html?dang-ky=...`). Admin xem ở tab *Mã QR*; chủ quán có thẻ QR ở *Quán của tôi*; `qr.html` in 2 áp phích A5
+  trên một tờ A4 để dán ở quầy quán và bảng tin khoa.
+
+### Giao diện chủ quán (theo mô hình GrabMerchant / beFood Merchant)
+
+| Mục | Chức năng |
+| --- | --- |
+| Đơn hàng (mở đầu tiên) | Thẻ đơn chia tab Mới / Đang làm / Hoàn thành / Đã hủy; nút Nhận đơn, Từ chối (chọn nhanh lý do), Báo hoàn thành; SĐT khách bấm để gọi; tự làm mới 15 giây, âm báo + số đơn chờ trên tab khi có đơn mới |
+| Tổng quan | Bật/tắt nhận đơn, danh sách việc cần làm cho quán mới, doanh thu / đơn hôm nay, đơn chờ, điểm đánh giá, biểu đồ doanh thu 7 hoặc 30 ngày (giờ Việt Nam), món bán chạy |
+| Thực đơn | Món chia theo danh mục, ảnh món, công tắc Còn món / Hết món, bấm vào giá để sửa ngay, tìm kiếm, lọc; thêm / sửa / ẩn / xóa món |
+| Cửa hàng | Đăng ký quán mới, ảnh bìa (kéo thả, tự thu nhỏ, hoặc chọn 1 trong 8 nền có sẵn: cơm, bún/phở, bánh mì, trà/cà phê, ăn vặt, món chay...), tên, địa chỉ, giới thiệu, giờ mở cửa, xem trước quán như sinh viên thấy, mã QR dán tại quán, xóa quán; nhiều quán thì chọn quán ở đầu trang |
+| Đánh giá | Điểm trung bình, phân bố sao, đánh giá mới nhất của từng quán |
+
+Thông báo và hồ sơ mở từ chuông và ảnh đại diện trên thanh trên. Ảnh lưu ở `DATA_DIR/uploads/` (tối đa 2 MB mỗi ảnh,
+chỉ JPEG/PNG/WebP, kiểm tra theo nội dung tệp). API mới: `POST :8002/api/uploads`, `GET :8003/api/orders/owner/stats`.
+Nền có sẵn được vẽ ngay trên trình duyệt (`web/static/assets/covers.js`) rồi tải lên như ảnh bìa, nên sinh viên thấy đúng
+nền chủ quán chọn. Quán chưa có ảnh bìa hiện nền tượng trưng đoán theo tên quán ("Bún Bò..." → tô bún), mọi thẻ quán cao bằng nhau.
+
+### Thanh toán trước bằng VietQR (tiền vào thẳng tài khoản của quán)
+
+- **Chủ quán khai báo tài khoản nhận tiền khi đăng ký** (ngân hàng trong danh sách Napas, số tài khoản, tên chủ tài khoản
+  in hoa không dấu); đổi sau ở Profile → *Tài khoản nhận tiền* (phải nhập lại mật khẩu). Chủ quán cũ chưa khai báo thì
+  sinh viên chưa đặt được món ở quán đó (409 `OWNER_NO_PAYOUT`), trang Đơn hàng / Tổng quan nhắc khai báo.
+- **Sinh viên thanh toán trước khi đơn tới bếp**: bấm Đặt hàng → trang thanh toán có **mã VietQR riêng của đơn** (đúng
+  ngân hàng, số tài khoản của quán, số tiền, nội dung `TDTU 047 AB12`), nút chép từng dòng, nút lưu ảnh QR (một điện
+  thoại: lưu ảnh rồi chọn ảnh trong app ngân hàng), đếm ngược 15 phút → bấm **"Tôi đã chuyển khoản"**.
+- **Chủ quán xác nhận**: tab **Chờ tiền** (có âm báo khi sinh viên báo đã chuyển) → mở app ngân hàng, thấy khoản tiền đúng
+  nội dung thì bấm **"Đã nhận tiền"** → đơn sang tab **Mới** để nhận và làm món (sinh viên được báo "đặt thành công", thấy
+  mã nhận món); không thấy tiền thì **"Chưa nhận được tiền"** (đơn hủy, sinh viên được báo kèm lý do).
+- **Hủy và hoàn tiền**: đơn chưa trả tiền sinh viên tự bỏ được, quá hạn thì tự hủy. Đơn đã trả tiền bị hủy (quán hoặc
+  admin) chuyển sang **Cần hoàn tiền**; quán chuyển trả rồi bấm "Đã hoàn tiền". Sinh viên báo đã chuyển mà quán không phản
+  hồi: admin hủy giúp, đơn cũng vào Cần hoàn tiền.
+- App **không giữ tiền, không thu phí** và không đối soát tự động với ngân hàng: chủ quán tự kiểm tra tài khoản. Tài khoản
+  của chủ quán demo ghi `TAI KHOAN DEMO` (số giả); trang thanh toán cảnh báo không chuyển tiền thật.
+- Mã QR do máy chủ giao diện tạo: `/qr/vietqr.svg|png?bin=&acc=&amount=&note=` (chuẩn EMVCo của Napas, CRC16).
+
+### Nhận món bằng mã 3 số và dùng như app trên điện thoại
+
+- **Mã đơn luôn là 3 chữ số** (`#047`): số thứ tự đơn trong ngày của từng quán. Sinh viên đặt món (mặc định "Tự tới quán
+  lấy", hoặc "Nhờ quán mang tới"), tới quầy đọc 3 số như khi lấy món Grab, be. Thẻ đơn của sinh viên có mã thật to; chủ quán
+  gõ mã vào ô "Tìm mã nhận món" là ra đúng đơn, đối chiếu tên rồi giao và bấm Báo hoàn thành.
+- **Hướng dẫn cho tài khoản mới**: vừa đăng ký xong sẽ hiện màn hướng dẫn 4 bước (sinh viên: đặt món → chuyển khoản
+  trước → nhớ mã → tới quán đọc mã; chủ quán: sinh viên chuyển khoản → bấm Đã nhận tiền → nhận đơn, làm món → hỏi mã,
+  giao món). Mở lại ở Profile.
+- **Sinh viên không tự hủy đơn đã đặt**: cần hủy thì gọi quán hoặc nhờ ban quản trị; **admin là người hủy đơn** (đơn chờ
+  xác nhận hoặc đang làm, kèm lý do; không xác nhận / hoàn thành thay quán). Chủ quán vẫn từ chối / hủy đơn của quán mình.
+- **Cài lên điện thoại như app (PWA)**: mở trang bằng Chrome (Android) hoặc Safari (iPhone) → nút "Cài app" (hoặc menu →
+  "Thêm vào màn hình chính"). App mở toàn màn hình, có biểu tượng riêng, hiện trang báo khi mất mạng. Trình duyệt chỉ cho cài
+  khi trang chạy qua HTTPS (bản Docker có gateway HTTPS) hoặc mở bằng `localhost` / `127.0.0.1`; điện thoại vào bằng
+  `http://192.168.x.x:8000` vẫn dùng được nhưng không cài được.
+- Giao diện điện thoại: thanh tab ở đáy, hộp thoại trượt từ dưới lên, thanh "Xem giỏ hàng" nổi, nút Đặt hàng dính đáy,
+  chừa vùng tai thỏ / thanh home của iPhone.
+
+### Trang Profile (kiểu trang Tài khoản của app be, dùng chung 3 vai trò)
+
+Thẻ đầu trang có ảnh đại diện (bấm biểu tượng máy ảnh để đổi; ảnh được cắt vuông, thu nhỏ 512 px rồi lưu ở Auth Service,
+`DATA_DIR/avatars/`), họ tên, email, số điện thoại; hàng số liệu nhanh theo vai trò (sinh viên: đơn đã đặt / hoàn thành /
+đánh giá; chủ quán: số quán / đơn đã nhận / hoàn thành; admin: tài khoản / quán chờ duyệt / đơn); nhóm **Tài khoản**
+(thông tin cá nhân, ảnh đại diện, đổi mật khẩu - các thiết bị khác bị đăng xuất), **Hoạt động** (lối tắt theo vai trò,
+chỗ nhận hay dùng của sinh viên), **Hỗ trợ và pháp lý** (email hỗ trợ, điều khoản, quyền riêng tư, yêu cầu xóa tài khoản),
+Đăng xuất. Ảnh đại diện cũng hiện ở thanh trên và trong danh sách người dùng của admin.
+
+### Giao diện admin (menu bên trái, kiểu AdminLTE / CoreUI)
+
+| Mục | Chức năng |
+| --- | --- |
+| Bảng điều khiển | 6 chỉ số (doanh thu hôm nay, đơn, tỉ lệ hoàn thành, người dùng, quán đang bán, điểm đánh giá); biểu đồ doanh thu / số đơn 7 hoặc 30 ngày; biểu đồ vòng tỉ lệ trạng thái đơn, cơ cấu người dùng, tình trạng quán; top quán theo % doanh thu; phân bố sao; danh sách "Cần xử lý"; tình trạng 5 service |
+| Sinh viên | Lọc theo trạng thái, bảng chi tiết: số đơn, hoàn thành, bị hủy, tổng chi, đơn gần đây; khóa / mở khóa, chuyển thành chủ quán |
+| Chủ quán | Số quán và trạng thái từng quán; bảng chi tiết: đơn và doanh thu 30 ngày của từng quán, duyệt / từ chối / khóa quán, xem thực đơn; khóa / mở khóa, chuyển thành sinh viên |
+| Tất cả tài khoản | Đổi vai trò (kể cả admin), khóa / mở khóa |
+| Quán ăn, Đơn hàng, Đánh giá | Bộ lọc dạng nút có số đếm; bấm tên chủ quán / sinh viên để mở bảng chi tiết của người đó |
+| Thông báo, Mã QR, Hồ sơ | Gửi lại thông báo lỗi, in mã QR, hồ sơ admin |
+
+Màu biểu đồ đã kiểm tra cho người mù màu (vàng = đang chờ, xanh dương = đang xử lý, xanh lá = tốt, hồng tím = hủy / khóa).
+Trên điện thoại menu thu vào nút ☰. API mới: `GET :8003/api/admin/orders/report`, lọc `owner_id` ở `GET :8002/api/admin/restaurants`.
+
+### Dùng mã QR trên điện thoại (cùng mạng Wi-Fi)
+
+Mặc định mọi địa chỉ là `127.0.0.1`, điện thoại không mở được. Trên máy chạy app (ví dụ IP LAN `192.168.1.10`, xem bằng
+`ipconfig` / `ip addr`), sửa `.env`:
+
+```
+PUBLIC_WEB_URL=http://192.168.1.10:8000
+PUBLIC_AUTH_URL=http://192.168.1.10:8001
+PUBLIC_RESTAURANT_URL=http://192.168.1.10:8002
+PUBLIC_ORDER_URL=http://192.168.1.10:8003
+PUBLIC_NOTIFICATION_URL=http://192.168.1.10:8004
+PUBLIC_REVIEW_URL=http://192.168.1.10:8005
+CORS_ORIGINS=http://127.0.0.1:8000,http://localhost:8000,http://192.168.1.10:8000
+```
+
+rồi `python manage.py stop` và `python manage.py start --host 0.0.0.0` (Windows có thể hỏi mở tường lửa cho cổng
+8000–8005: chọn mạng riêng). In lại áp phích sau khi đổi địa chỉ. Khi triển khai thật trên tên miền, đặt các biến trên
+bằng địa chỉ công khai.
+
 ## Tài khoản demo (chỉ có sau `seed`, dữ liệu giả)
 
 | Vai trò | Email | Mật khẩu |
@@ -126,6 +236,25 @@ Trang `/docs` của Restaurant, Order, Notification, Review tải Swagger UI t�
   `notifications` nằm trong database PostgreSQL `tdtu_notification`. Dữ liệu giữ nguyên sau khi stop/start.
 - `python manage.py reset-demo --yes` **XÓA toàn bộ dữ liệu** (các tệp trong `DATA_DIR` và bảng `notifications`),
   rồi start và nạp lại dữ liệu demo (phải stop trước).
+
+## Chạy thử với người dùng thật (Docker, HTTPS, sao lưu)
+
+Hướng dẫn đầy đủ: [`docs/DEPLOY.md`](docs/DEPLOY.md). Tóm tắt:
+
+```bash
+python manage.py init-env                    # sửa SERVER_NAME, PUBLIC_ORIGIN, CONTACT_EMAIL trong .env
+docker compose up -d --build                 # 5 service + web + PostgreSQL + gateway Nginx (HTTPS) + sao lưu tự động
+docker compose exec auth python -m services.auth.admin_tools --email <email> --name "<Họ tên>"
+```
+
+- Một tên miền: giao diện ở `/`, API ở `/svc/<service>/`; chỉ gateway mở cổng, `/internal` và trang tài liệu API bị chặn.
+- Bảo mật: mật khẩu từ 8 ký tự có cả chữ và số; đăng nhập sai 5 lần (cùng email + IP) thì tạm khóa 15 phút; giới hạn
+  tần suất ở gateway; HTTPS + HSTS; giao diện có CSP chặt (không script nhúng), chống nhúng trang (clickjacking).
+- Pháp lý: trang [Điều khoản sử dụng](web/static/dieu-khoan.html) và [Chính sách quyền riêng tư](web/static/quyen-rieng-tu.html);
+  đăng ký phải tick đồng ý (lưu thời điểm đồng ý); admin xử lý yêu cầu xóa dữ liệu cá nhân bằng nút
+  *Xóa dữ liệu cá nhân* (Auth điều phối 4 service còn lại ẩn danh / xóa dữ liệu của người đó).
+- Sao lưu: container `backup` sao lưu mỗi ngày cả 5 cơ sở dữ liệu + ảnh, giữ 7 bản. Không dùng Docker:
+  `python manage.py backup` / `python manage.py restore <tệp> --yes` (xem `docs/DEPLOY.md`, mục 6).
 
 ## Kiểm thử
 
@@ -152,6 +281,8 @@ Postman: import `docs/postman/*.json`, chạy thư mục "0. Luồng demo". Kế
 | `docs/REQUIREMENTS.md` | Đối chiếu yêu cầu → chức năng → API/UI → test |
 | `docs/SOURCE_REVIEW.md`, `docs/MERGE_DECISIONS.md` | Đánh giá các bộ nguồn và quyết định hợp nhất theo từng thành viên |
 | `docs/TEST_REPORT.md` | Môi trường, lệnh, kết quả kiểm thử thực tế |
+| `docs/DOCKER.md` | Hướng dẫn nhóm chạy cả hệ thống bằng Docker Desktop trên máy cá nhân |
+| `docs/DEPLOY.md` | Chạy thử bằng Docker: gateway HTTPS, sao lưu / khôi phục, cập nhật, yêu cầu xóa dữ liệu |
 | `docs/PROJECT_SUMMARY.md` | Tóm tắt phục vụ thuyết trình |
 | `docs/diagrams/` | Use Case, DFD mức 0/1/2, ERD (PNG/SVG) + `gen_diagrams.py` |
 | `docs/openapi/` | OpenAPI của 5 service (`python manage.py export-openapi`) |
@@ -173,7 +304,9 @@ Postman: import `docs/postman/*.json`, chạy thư mục "0. Luồng demo". Kế
 
 ## Giới hạn còn lại
 
-- SQLite/H2 dạng tệp phù hợp demo một máy; `php -S` là máy chủ phát triển của PHP.
-- Không có thanh toán, giao hàng, email/SMS; giờ mở cửa chỉ để hiển thị.
-- Đã chạy và kiểm thử trên Linux; Windows (`run.ps1`, `mvnw.cmd`, `taskkill`, PHP/Go trên Windows) chưa chạy trên máy
-  Windows thật (xem `docs/TEST_REPORT.md`).
+- SQLite/H2 dạng tệp phù hợp chạy thử một máy chủ (vài trăm người dùng), chưa mở rộng ngang được.
+  `php -S` chỉ dùng khi phát triển; bản Docker chạy Review trên Apache.
+- Thanh toán trước do chủ quán tự xác nhận (chưa nối webhook ngân hàng / cổng thanh toán); không có giao hàng,
+  email/SMS; giờ mở cửa chỉ để hiển thị.
+- Đã chạy và kiểm thử trên Linux và Windows 11 (`manage.py`, `mvnw.cmd`, PHP/Go/Java/Node trên Windows, PostgreSQL bằng
+  Docker); `run.ps1 setup` / `pg-setup` trên PowerShell 5.1 chưa chạy lại (xem `docs/TEST_REPORT.md`).

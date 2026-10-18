@@ -45,7 +45,7 @@ Lựa chọn của nhóm khi có phương án: giữ **Spring Boot** cho Order (
 | --- | --- | --- |
 | `OrderStatus` + `canChangeTo` + `OrderStatusTest` | Giữ nguyên | Luật chuyển trạng thái đúng |
 | `Cart/CartItem`, giỏ 1 quán, đổi quán khi giỏ trống | Giữ ý tưởng, bảng `carts/cart_items` | Thêm 409 `CART_OTHER_RESTAURANT` |
-| Admin chỉ hủy đơn lỗi | Giữ | Admin không xử lý thay chủ quán |
+| Admin chỉ hủy đơn lỗi | Giữ | Admin không xử lý thay chủ quán; từ 16/10/2026 admin là người hủy đơn, sinh viên không tự hủy đơn đã đặt |
 | Bộ lọc đơn (trạng thái, quán, người dùng, ngày) | Giữ, thêm phân trang | |
 | H2 trong bộ nhớ, `ddl-auto` | Đổi: H2 dạng tệp + `schema.sql` | Dữ liệu còn sau khi tắt; bảng đúng ERD (CHECK, UNIQUE) |
 | Spring Data JPA | Đổi sang `JdbcTemplate` (spring-boot-starter-jdbc) | Cần `SELECT … FOR UPDATE`, `UPDATE … WHERE status=<cũ>` và đọc ngay sau ghi trong cùng giao dịch; viết SQL tường minh rõ ràng hơn, khởi động nhanh hơn |

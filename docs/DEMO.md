@@ -27,15 +27,21 @@ Trên trang đăng nhập có nút điền nhanh tài khoản demo.
 2. Mở **Cơm Tấm Cô Ba**: "Canh chua cá lóc" hết món (nút Thêm bị khóa), món ẩn không hiển thị.
 3. Thêm 2 × "Cơm tấm sườn bì chả" và 1 × "Trà đá" → giỏ bên phải tính 73.000 đ.
 4. Thử thêm món của quán "Bún Bò Huế O Hà" → hệ thống hỏi xóa giỏ (giỏ chỉ chứa món của 1 quán) → chọn Hủy.
-5. **Đặt hàng** → nhập địa chỉ → đơn mới ở tab **Đơn của tôi**, trạng thái "Chờ xác nhận".
+5. **Đặt hàng** (mặc định "Tự tới quán lấy") → trang **thanh toán**: mã VietQR riêng của đơn (ngân hàng, số tài khoản của
+   quán, 73.000 đ, nội dung `TDTU 0xx ...`), đếm ngược 15 phút. Tài khoản demo ghi `TAI KHOAN DEMO`: **không chuyển tiền
+   thật**, bấm thẳng **Tôi đã chuyển khoản** → "Chờ quán xác nhận đã nhận tiền".
    Điểm nhấn: giá do server lấy lại từ Restaurant, đơn lưu ảnh chụp tên và giá món; bấm Đặt hàng nhiều lần không tạo đơn trùng.
 
 ## 2. Chủ quán xử lý đơn (2 phút)
 
-1. Đăng nhập `chuquan1` → tab **Đơn hàng** thấy đơn mới; chuông thông báo có "Quán Cơm Tấm Cô Ba có đơn mới".
-2. **Xác nhận** → chuyển lọc sang "Đã xác nhận" → **Hoàn thành**.
-3. Tab **Thực đơn**: đổi giá "Cơm tấm sườn bì chả" lên 40.000 → quay lại cửa sổ sinh viên, đơn vừa đặt vẫn giữ giá 35.000.
-4. Tab **Quán của tôi**: "Trà Sữa Mây" ở trạng thái "Chờ duyệt", chưa thể mở bán.
+1. Đăng nhập `chuquan1` → tab **Đơn hàng** → **Chờ tiền**: đơn vừa đặt ghi "Sinh viên báo đã chuyển 73.000 đ" kèm nội dung
+   chuyển khoản; chuông có "Quán Cơm Tấm Cô Ba có đơn mới ... sinh viên báo đã chuyển khoản". (Chạy thật: mở app ngân hàng
+   tìm khoản tiền đúng nội dung.)
+2. **Đã nhận tiền** → đơn sang tab **Mới**; cửa sổ sinh viên tự chuyển thành "Đặt món thành công!" với mã nhận món 3 số.
+3. **Nhận đơn** → tab "Đang làm" → **Báo hoàn thành**. (Seed có sẵn 1 đơn ở Chờ tiền để thử nút "Chưa nhận được tiền".)
+4. Tab **Thực đơn**: đổi giá "Cơm tấm sườn bì chả" lên 40.000 → quay lại cửa sổ sinh viên, đơn vừa đặt vẫn giữ giá 35.000.
+5. Tab **Quán của tôi**: "Trà Sữa Mây" ở trạng thái "Chờ duyệt", chưa thể mở bán.
+6. Ảnh đại diện → Profile → **Nhận tiền**: tài khoản nhận tiền (đổi cần mật khẩu) và **Mã QR nhận tiền của quán** để in.
 
 ## 3. Sinh viên nhận thông báo và đánh giá (2 phút)
 
@@ -49,7 +55,9 @@ Trên trang đăng nhập có nút điền nhanh tài khoản demo.
 2. **Quán ăn** → **Duyệt** "Trà Sữa Mây" → quán xuất hiện ở trang sinh viên.
 3. **Đánh giá** → **Ẩn** một đánh giá kèm lý do → điểm trung bình của quán tính lại.
 4. **Người dùng** → **Khóa** `sv2@demo.tdtu.vn` → nếu sv2 đang đăng nhập ở cửa sổ khác, thao tác tiếp theo bị đưa về trang đăng nhập (token bị thu hồi); đăng nhập lại sẽ nhận thông báo tài khoản bị khóa.
-5. **Đơn hàng** → lọc trạng thái, xem chi tiết, **Hủy đơn lỗi** một đơn đang chờ (cả sinh viên và chủ quán nhận thông báo).
+5. **Đơn hàng** → lọc trạng thái (có "Chờ thanh toán", "Không thanh toán xong"), xem chi tiết (thanh toán vào tài khoản
+   nào, lúc nào), **Hủy đơn** một đơn đang chờ theo lời nhờ của sinh viên (sinh viên không tự hủy được; cả sinh viên và chủ
+   quán nhận thông báo). Đơn đã trả tiền bị hủy chuyển sang "Chờ hoàn tiền": chủ quán vào tab **Cần hoàn tiền** → **Đã hoàn tiền**.
 
 ## 5. Kỹ thuật (tùy thời gian)
 

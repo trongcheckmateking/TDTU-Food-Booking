@@ -17,24 +17,33 @@ ENT = {
     "USERS": [("uuid", "id", "PK"), ("string", "name", ""), ("string", "email", "UK"),
               ("string", "password_hash", ""), ("enum", "role", ""), ("string", "phone", ""),
               ("enum", "status", ""), ("int", "token_version", ""), ("timestamp", "created_at", ""),
-              ("timestamp", "updated_at", "")],
+              ("timestamp", "updated_at", ""), ("timestamp", "terms_accepted_at", ""), ("timestamp", "erased_at", ""),
+              ("string", "avatar_url", ""), ("string", "bank_bin / bank_account / bank_holder", "")],
+    "LOGIN_ATTEMPTS": [("string", "key (email|IP)", "PK"), ("int", "fails", ""), ("timestamp", "window_start", ""),
+                       ("timestamp", "locked_until", "")],
     "RESTAURANTS": [("uuid", "id", "PK"), ("uuid", "owner_id", "ref"), ("string", "name", ""),
                     ("string", "address", ""), ("string", "description", ""), ("HH:MM", "open_time", ""),
                     ("HH:MM", "close_time", ""), ("string", "image_url", ""), ("enum", "status", ""),
                     ("string", "status_reason", ""), ("timestamp", "created_at / updated_at", ""),
                     ("timestamp", "deleted_at", "")],
     "MENU_ITEMS": [("uuid", "id", "PK"), ("uuid", "restaurant_id", "FK"), ("string", "name", ""),
-                   ("int VND", "price", ""), ("string", "description", ""), ("string", "image_url", ""),
+                   ("int VND", "price", ""), ("string", "description", ""), ("string", "category", ""), ("string", "image_url", ""),
                    ("enum", "status", ""), ("timestamp", "created_at / updated_at", ""), ("timestamp", "deleted_at", "")],
+    "MENU_UPDATES": [("uuid", "item_id", "PK, FK"), ("uuid", "restaurant_id", "FK"),
+                     ("enum", "kind (new/price/back)", ""), ("int VND", "old_price", ""), ("int VND", "new_price", ""),
+                     ("timestamp", "created_at", "")],
     "CARTS": [("uuid", "id", "PK"), ("uuid", "user_id", "ref, UK"), ("uuid", "restaurant_id", "ref"),
               ("timestamp", "updated_at", "")],
     "CART_ITEMS": [("uuid", "id", "PK"), ("uuid", "cart_id", "FK"), ("uuid", "item_id", "ref"),
                    ("int", "quantity", ""), ("timestamp", "added_at", "")],
-    "ORDERS": [("uuid", "id", "PK"), ("uuid", "user_id", "ref"), ("string", "customer_name / phone", ""),
+    "PICKUP_COUNTERS": [("uuid", "restaurant_id", "PK, ref"), ("date", "order_day", "PK"), ("int", "last_no", "")],
+    "ORDERS": [("uuid", "id", "PK"), ("string 3 số", "pickup_code", ""), ("uuid", "user_id", "ref"), ("string", "customer_name / phone", ""),
                ("uuid", "restaurant_id", "ref"), ("string", "restaurant_name", ""), ("uuid", "restaurant_owner_id", "ref"),
                ("enum", "status", ""), ("int VND", "total_price", ""), ("string", "delivery_address", ""),
                ("string", "note", ""), ("string", "cancel_reason / cancelled_by", ""),
-               ("string", "idempotency_key", "UK*"), ("timestamp", "created_at / updated_at", "")],
+               ("string", "idempotency_key", "UK*"), ("enum", "payment_status", ""),
+               ("string", "pay_bank_bin / pay_account / pay_holder", ""), ("string", "pay_note", ""),
+               ("timestamp", "pay_deadline / pay_claimed_at / paid_at", ""), ("timestamp", "created_at / updated_at", "")],
     "ORDER_ITEMS": [("uuid", "id", "PK"), ("uuid", "order_id", "FK"), ("uuid", "item_id", "ref"),
                     ("string", "item_name", ""), ("int", "quantity", ""), ("int VND", "price", ""),
                     ("int VND", "line_total", "")],
@@ -50,11 +59,13 @@ ENT = {
                 ("string", "hidden_reason", ""), ("timestamp", "created_at / updated_at", "")],
 }
 OWNER = {
-    "USERS": ("Auth Service (Python · SQLite)", "#DCEBFA"),
+    "USERS": ("Auth Service (Python · SQLite)", "#DCEBFA"), "LOGIN_ATTEMPTS": ("Auth Service (Python · SQLite)", "#DCEBFA"),
     "RESTAURANTS": ("Restaurant Service (Node.js · SQLite)", "#E3F4E1"), "MENU_ITEMS": ("Restaurant Service (Node.js · SQLite)", "#E3F4E1"),
+    "MENU_UPDATES": ("Restaurant Service (Node.js · SQLite)", "#E3F4E1"),
     "CARTS": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"), "CART_ITEMS": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"),
     "ORDERS": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"), "ORDER_ITEMS": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"),
     "NOTIFICATION_OUTBOX": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"),
+    "PICKUP_COUNTERS": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"),
     "NOTIFICATIONS": ("Notification Service (Go · PostgreSQL)", "#EFE3F7"),
     "REVIEWS": ("Review Service (PHP · SQLite)", "#FBE0E0"),
 }
@@ -66,6 +77,7 @@ REL = [
     ("USERS", "REVIEWS", "writes", "crowodot"),
     ("USERS", "NOTIFICATIONS", "receives", "crowodot"),
     ("RESTAURANTS", "MENU_ITEMS", "has", "crowodot"),
+    ("MENU_ITEMS", "MENU_UPDATES", "announced in", "teeodot"),
     ("RESTAURANTS", "ORDERS", "receives", "crowodot"),
     ("RESTAURANTS", "REVIEWS", "receives", "crowodot"),
     ("CARTS", "CART_ITEMS", "contains", "crowodot"),
@@ -200,14 +212,16 @@ def write_render(path_noext, src):
 # =================================================================== BUILD ==
 def build_erd():
     erd("ERD_0_tong_the", "ERD tổng thể – TDTU Food Booking (bản hợp nhất)", list(ENT), [],
-        "7 bảng lõi + CARTS, CART_ITEMS, NOTIFICATION_OUTBOX. Màu = service sở hữu: xanh dương Auth (Python, SQLite), "
+        "7 bảng lõi + CARTS, CART_ITEMS, NOTIFICATION_OUTBOX, MENU_UPDATES. Màu = service sở hữu: xanh dương Auth (Python, SQLite), "
         "xanh lá Restaurant (Node.js, SQLite), cam Order (Java Spring Boot, H2), tím Notification (Go, PostgreSQL), "
         "hồng Review (PHP, SQLite). Nét liền = FK thật cùng DB; nét đứt = tham chiếu logic xuyên service (không có FK)")
-    erd("ERD_1_auth", "ERD – Auth Service (Python · SQLite)", ["USERS"], ["RESTAURANTS", "ORDERS", "CARTS", "REVIEWS", "NOTIFICATIONS"],
-        "Sở hữu USERS. status active/locked; token_version tăng khi khóa, đổi vai trò, đăng xuất → token cũ hết hiệu lực")
-    erd("ERD_2_restaurant", "ERD – Restaurant Service (Node.js · SQLite)", ["RESTAURANTS", "MENU_ITEMS"], ["USERS"],
-        "status quán: pending / active / closed / locked; món: available / sold_out / hidden; xóa = deleted_at")
-    erd("ERD_3_order", "ERD – Order Service (Java Spring Boot · H2)", ["CARTS", "CART_ITEMS", "ORDERS", "ORDER_ITEMS", "NOTIFICATION_OUTBOX"],
+    erd("ERD_1_auth", "ERD – Auth Service (Python · SQLite)", ["USERS", "LOGIN_ATTEMPTS"], ["RESTAURANTS", "ORDERS", "CARTS", "REVIEWS", "NOTIFICATIONS"],
+        "Sở hữu USERS. status active/locked; token_version tăng khi khóa, đổi vai trò, đăng xuất → token cũ hết hiệu lực. "
+        "LOGIN_ATTEMPTS: đếm đăng nhập sai theo email + IP để tạm khóa")
+    erd("ERD_2_restaurant", "ERD – Restaurant Service (Node.js · SQLite)", ["RESTAURANTS", "MENU_ITEMS", "MENU_UPDATES"], ["USERS"],
+        "status quán: pending / active / closed / locked; món: available / sold_out / hidden; xóa = deleted_at. "
+        "MENU_UPDATES = bảng tin món mới, mỗi món một tin (thêm món, đổi giá, bán lại)")
+    erd("ERD_3_order", "ERD – Order Service (Java Spring Boot · H2)", ["CARTS", "CART_ITEMS", "ORDERS", "ORDER_ITEMS", "NOTIFICATION_OUTBOX", "PICKUP_COUNTERS"],
         ["USERS", "RESTAURANTS", "MENU_ITEMS"],
         "Đơn lưu ảnh chụp tên quán, tên món, đơn giá. UK* = UNIQUE(user_id, idempotency_key)")
     erd("ERD_4_notification", "ERD – Notification Service (Go · PostgreSQL)", ["NOTIFICATIONS"], ["USERS", "ORDERS"],

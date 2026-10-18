@@ -9,6 +9,7 @@ Các thư mục còn lại liệt kê mọi endpoint của từng service. Khôn
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +26,8 @@ def token_for(path: str, tags: list[str]) -> str | None:
         return None
     if "admin" in tags or path.startswith("/api/admin") or path.startswith("/api/users/{"):
         return "token_admin"
-    if "owner" in tags or "/owner" in path or path.startswith("/api/menu-items/{mid}"):
+    if ("owner" in tags or "/owner" in path or path.startswith("/api/menu-items/{mid}") or path == "/api/users/me/payout"
+            or re.search(r"/payment/(confirm|reject|refunded)$", path)):
         return "token_owner"
     if path == "/api/users":
         return "token_admin"
@@ -97,28 +99,33 @@ pm.test("tạm tính = 2 x giá", () => pm.expect(pm.response.json().total_price
             headers={"Idempotency-Key": "{{checkout_key}}"}, body={"delivery_address": "KTX TDTU, phòng B305"},
             prerequest='pm.collectionVariables.set("checkout_key", pm.variables.replaceIn("{{$guid}}"));', tests="""
 pm.test("201", () => pm.response.to.have.status(201));
-pm.test("đơn pending, có ảnh chụp tên món", () => { const o = pm.response.json();
-  pm.expect(o.status).to.eql("pending"); pm.expect(o.items[0].item_name).to.be.a("string"); });
+pm.test("đơn pending, chờ thanh toán, có ảnh chụp tên món", () => { const o = pm.response.json();
+  pm.expect(o.status).to.eql("pending"); pm.expect(o.payment.status).to.eql("unpaid");
+  pm.expect(o.payment.account).to.be.a("string"); pm.expect(o.items[0].item_name).to.be.a("string"); });
 pm.collectionVariables.set("order_id", pm.response.json().id);"""),
         req("9. Gửi lại cùng Idempotency-Key -> cùng đơn", "POST", "order", "/api/orders/checkout", token="token_sv",
             headers={"Idempotency-Key": "{{checkout_key}}"}, body={"delivery_address": "KTX TDTU, phòng B305"}, tests="""
 pm.test("200 replay", () => pm.response.to.have.status(200));
 pm.test("cùng đơn", () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get("order_id")));"""),
-        req("10. Chủ quán xác nhận", "PATCH", "order", "/api/orders/{{order_id}}/status", token="token_owner",
+        req("10. Sinh viên quét VietQR, báo đã chuyển khoản", "POST", "order", "/api/orders/{{order_id}}/payment/claim",
+            token="token_sv", tests='pm.test("claimed", () => pm.expect(pm.response.json().payment.status).to.eql("claimed"));'),
+        req("11. Chủ quán thấy tiền vào: Đã nhận tiền", "POST", "order", "/api/orders/{{order_id}}/payment/confirm",
+            token="token_owner", tests='pm.test("paid", () => pm.expect(pm.response.json().payment.status).to.eql("paid"));'),
+        req("12. Chủ quán nhận đơn", "PATCH", "order", "/api/orders/{{order_id}}/status", token="token_owner",
             body={"status": "confirmed"}, tests='pm.test("200", () => pm.response.to.have.status(200));'),
-        req("11. Chủ quán hoàn thành", "PATCH", "order", "/api/orders/{{order_id}}/status", token="token_owner",
+        req("13. Chủ quán hoàn thành", "PATCH", "order", "/api/orders/{{order_id}}/status", token="token_owner",
             body={"status": "completed"}, tests='pm.test("200", () => pm.response.to.have.status(200));'),
-        req("12. Sinh viên xem thông báo chưa đọc", "GET", "notification", "/api/notifications/me?status=unread",
+        req("14. Sinh viên xem thông báo chưa đọc", "GET", "notification", "/api/notifications/me?status=unread",
             token="token_sv", tests="""
 pm.test("có thông báo hoàn thành", () => pm.expect(pm.response.json().items.some(n => n.type === "order_completed")).to.be.true);"""),
-        req("13. Sinh viên đánh giá", "POST", "review", "/api/reviews", token="token_sv",
+        req("15. Sinh viên đánh giá", "POST", "review", "/api/reviews", token="token_sv",
             body={"order_id": "{{order_id}}", "rating": 5, "comment": "Ngon, giao nhanh"},
             tests='pm.test("201", () => pm.response.to.have.status(201));'),
-        req("14. Điểm trung bình quán", "GET", "review", "/api/reviews/restaurant/{{restaurant_id}}/summary",
+        req("16. Điểm trung bình quán", "GET", "review", "/api/reviews/restaurant/{{restaurant_id}}/summary",
             tests='pm.test("có điểm", () => pm.expect(pm.response.json().count).to.be.above(0));'),
-        req("15. Admin thống kê", "GET", "order", "/api/admin/orders/stats", token="token_admin",
+        req("17. Admin thống kê", "GET", "order", "/api/admin/orders/stats", token="token_admin",
             tests='pm.test("200", () => pm.response.to.have.status(200));'),
-        req("16. Không có token -> 401", "GET", "order", "/api/orders/me", tests="""
+        req("18. Không có token -> 401", "GET", "order", "/api/orders/me", tests="""
 pm.test("401", () => pm.response.to.have.status(401));
 pm.test("mã lỗi", () => pm.expect(pm.response.json().code).to.eql("UNAUTHORIZED"));"""),
     ]

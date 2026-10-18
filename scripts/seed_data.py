@@ -23,6 +23,12 @@ USERS = [  # email, họ tên, vai trò, số điện thoại
     ("sv2@demo.tdtu.vn", "Phạm Thị Bình", "sinh_vien", "0901000022"),
     ("sv3.bikhoa@demo.tdtu.vn", "Võ Minh Khóa", "sinh_vien", None),     # bị admin khóa sau khi tạo
 ]
+# Tài khoản nhận tiền DEMO của chủ quán (số giả, tên chủ tài khoản ghi rõ DEMO; giao diện cảnh báo không chuyển tiền
+# thật vào tài khoản có chữ DEMO). Khi chạy thật, chủ quán tự khai báo tài khoản của mình lúc đăng ký / trong Profile.
+DEMO_BANKS = {
+    "chuquan1@demo.tdtu.vn": {"bank_bin": "970436", "bank_account": "0000000000011", "bank_holder": "TAI KHOAN DEMO"},
+    "chuquan2@demo.tdtu.vn": {"bank_bin": "970422", "bank_account": "0000000000012", "bank_holder": "TAI KHOAN DEMO"},
+}
 # khóa, chủ quán, tên, địa chỉ, mô tả, giờ mở, giờ đóng, trạng thái cuối
 RESTAURANTS = [
     ("R1", "chuquan1", "Cơm Tấm Cô Ba", "19 Nguyễn Hữu Thọ, Tân Phong, Q7", "Cơm tấm sườn nướng than", "06:30", "21:00", "active"),
@@ -39,7 +45,9 @@ ITEMS = {  # quán -> [(tên, giá, mô tả, trạng thái)]
     "R3": [("Trà sữa trân châu", 30000, None, "available")],
     "R4": [("Bánh mì thịt", 20000, None, "available")],
 }
-# sinh viên, quán, [(món, số lượng)], trạng thái cuối, địa chỉ, đánh giá (sao, nhận xét) hoặc None
+# sinh viên, quán, [(món, số lượng)], trạng thái cuối, địa chỉ, đánh giá (sao, nhận xét) hoặc None.
+# Trạng thái cuối "cho_tien": sinh viên đã báo chuyển khoản, quán chưa xác nhận (tab Chờ tiền của chủ quán).
+# Đơn "cancelled": đã trả tiền, admin hủy giúp theo lời nhờ -> quán cần hoàn tiền.
 ORDERS = [
     ("sv1", "R1", [("Cơm tấm sườn bì chả", 2), ("Trà đá", 2)], "completed", "KTX TDTU, phòng B305", (5, "Sườn mềm, giao nhanh.")),
     ("sv2", "R1", [("Cơm tấm sườn trứng", 1)], "completed", "Thư viện TDTU", (4, "Ngon, hơi ít rau.")),
@@ -47,6 +55,7 @@ ORDERS = [
     ("sv2", "R2", [("Bún bò đặc biệt", 1)], "completed", "Nhà thi đấu TDTU", None),
     ("sv1", "R2", [("Bún bò đặc biệt", 1), ("Nước sâm", 1)], "confirmed", "Tòa A TDTU", None),
     ("sv2", "R2", [("Bún bò thường", 2)], "pending", "KTX TDTU, phòng C210", None),
+    ("sv1", "R1", [("Cơm tấm sườn trứng", 1), ("Trà đá", 1)], "cho_tien", "Tòa B TDTU", None),
 ]
 
 
@@ -76,7 +85,8 @@ def seed() -> dict:
 
     tokens, ids = {}, {}
     for email, name, role, phone in USERS:
-        body = {"name": name, "email": email, "password": DEMO_PASSWORD, "role": role}
+        body = {"name": name, "email": email, "password": DEMO_PASSWORD, "role": role, "accept_terms": True,
+                **DEMO_BANKS.get(email, {})}
         if phone:
             body["phone"] = phone
         r = api.s.post(api.url["auth"] + "/api/users/register", json=body, timeout=30)
@@ -88,7 +98,10 @@ def seed() -> dict:
         if email.startswith("sv3"):
             continue
         tokens[key] = api.login(email, DEMO_PASSWORD)
-        ids[key] = api.call("GET", "auth", "/api/users/me", tokens[key])["id"]
+        me = api.call("GET", "auth", "/api/users/me", tokens[key])
+        ids[key] = me["id"]
+        if email in DEMO_BANKS and not me.get("bank_account"):      # chủ quán demo tạo trước khi có thanh toán trước
+            api.call("PUT", "auth", "/api/users/me/payout", tokens[key], json={**DEMO_BANKS[email], "password": DEMO_PASSWORD})
 
     # quán + món (giữ nguyên nếu đã có theo tên)
     rid, menu = {}, {}
@@ -123,11 +136,17 @@ def seed() -> dict:
                          json={"restaurant_id": rid[key], "item_id": menu[(key, iname)][0], "quantity": qty})
             o = api.call("POST", "order", "/api/orders/checkout", tokens[student], json={"delivery_address": addr})
             counts["orders"] += 1
+            # thanh toán trước: sinh viên báo đã chuyển khoản, chủ quán xác nhận đã nhận tiền
+            api.call("POST", "order", f"/api/orders/{o['id']}/payment/claim", tokens[student])
+            if final == "cho_tien":
+                continue
+            api.call("POST", "order", f"/api/orders/{o['id']}/payment/confirm", tokens[owner_of[key]])
             steps = {"pending": [], "confirmed": ["confirmed"], "completed": ["confirmed", "completed"],
                      "cancelled": ["cancelled"]}[final]
             for st in steps:
-                actor = tokens[student] if st == "cancelled" else tokens[owner_of[key]]
-                body = {"status": st, "reason": "Đổi ý, đặt nhầm món"} if st == "cancelled" else {"status": st}
+                # sinh viên không tự hủy đơn đã đặt: admin hủy giúp theo lời nhờ
+                actor = admin if st == "cancelled" else tokens[owner_of[key]]
+                body = {"status": st, "reason": "Sinh viên nhờ hủy: đặt nhầm món"} if st == "cancelled" else {"status": st}
                 api.call("PATCH", "order", f"/api/orders/{o['id']}/status", actor, json=body)
             if review:
                 api.call("POST", "review", "/api/reviews", tokens[student],

@@ -1,0 +1,30 @@
+#!/bin/sh
+# Chạy (source) trước bước envsubst của image nginx: chuẩn bị biến cho default.conf.template.
+#  - Chứng chỉ TLS: Let's Encrypt nếu đã có cho SERVER_NAME, không thì tự tạo chứng chỉ tự ký (chỉ để chạy thử).
+#  - Hậu tố cổng khi chuyển HTTP -> HTTPS (HTTPS_PORT khác 443).
+# Tệp được source nên không dùng set -e / exit.
+: "${SERVER_NAME:=localhost}"
+export SERVER_NAME
+le="/etc/letsencrypt/live/$SERVER_NAME"
+if [ -s "$le/fullchain.pem" ] && [ -s "$le/privkey.pem" ]; then
+    export SSL_CERT="$le/fullchain.pem" SSL_KEY="$le/privkey.pem"
+    echo "tdtu: dùng chứng chỉ Let's Encrypt của $SERVER_NAME"
+else
+    certs=/etc/nginx/certs
+    mkdir -p "$certs"
+    if [ ! -s "$certs/$SERVER_NAME.crt" ] || [ ! -s "$certs/$SERVER_NAME.key" ]; then
+        case "$SERVER_NAME" in
+            *[!0-9.]*) san="DNS:$SERVER_NAME,DNS:localhost,IP:127.0.0.1" ;;
+            *) san="IP:$SERVER_NAME,DNS:localhost,IP:127.0.0.1" ;;
+        esac
+        openssl req -x509 -newkey rsa:2048 -nodes -days 825 -subj "/CN=$SERVER_NAME" -addext "subjectAltName=$san" \
+            -keyout "$certs/$SERVER_NAME.key" -out "$certs/$SERVER_NAME.crt" 2>/dev/null \
+            && echo "tdtu: đã tạo chứng chỉ tự ký cho $SERVER_NAME (chỉ dùng thử - tên miền thật xem docs/DEPLOY.md)"
+    fi
+    export SSL_CERT="$certs/$SERVER_NAME.crt" SSL_KEY="$certs/$SERVER_NAME.key"
+fi
+if [ "${HTTPS_PORT:-443}" = "443" ]; then
+    export HTTPS_PORT_SUFFIX=""
+else
+    export HTTPS_PORT_SUFFIX=":$HTTPS_PORT"
+fi

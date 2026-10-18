@@ -2,88 +2,145 @@
 <html lang="vi">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TDTU Food Booking – Đăng nhập</title>
-<link rel="icon" href="assets/favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TDTU Food – Đặt món quanh trường</title>
+<meta name="description" content="Đặt món từ các quán quanh Đại học Tôn Đức Thắng, nhận thông báo khi quán làm xong.">
+<meta name="theme-color" content="#15489d">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="TDTU Food">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="stylesheet" href="assets/style.css">
 <script src="config.js"></script>
 <script src="assets/app.js"></script>
+<script src="assets/payment.js"></script>
 </head>
 <body>
-<div class="auth-wrap">
-  <div class="card auth-card">
-    <h1>TDTU Food Booking</h1>
-    <div class="muted">Đặt đồ ăn từ các quán gần trường</div>
-    <div class="seg" role="tablist">
-      <button id="tLogin" class="on" type="button" role="tab">Đăng nhập</button>
-      <button id="tReg" type="button" role="tab">Đăng ký</button>
+<header class="site-head">
+  <a class="brand" href="index.html" aria-label="TDTU Food – trang chủ">
+    <img src="assets/brand/logo.png" alt="" width="44" height="44"><span class="wordmark">TDTU <i>Food</i></span>
+  </a>
+  <nav aria-label="Trang giới thiệu">
+    <a class="nav-link" href="#bang-tin">Món mới</a>
+    <a class="nav-link" href="#tham-gia">Mở quán</a>
+    <a class="btn primary sm" href="#dang-nhap" data-open="login">Đăng nhập</a>
+  </nav>
+</header>
+
+<main class="landing">
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-copy">
+        <h1 class="display">Ăn gì giữa hai tiết?</h1>
+        <p class="lede">Đặt món từ các quán quanh trường trên đường Nguyễn Hữu Thọ, ghi chỗ nhận ở cổng trường, ký túc xá
+          hay phòng học. Quán xác nhận và làm xong là bạn có thông báo ngay.</p>
+        <div class="hero-cta">
+          <a class="btn hot" href="?dang-ky=sinh-vien#dang-nhap" data-open="sinh_vien">Tạo tài khoản sinh viên</a>
+          <a class="btn" href="?dang-ky=chu-quan#dang-nhap" data-open="chu_quan">Đăng ký mở quán</a>
+        </div>
+      </div>
+
+      <div class="hero-auth" id="dang-nhap">
+        <div class="card auth-card">
+          <h2 id="authTitle">Chào bạn</h2>
+          <div class="muted">Đăng nhập bằng email đã đăng ký</div>
+          <div class="seg" role="tablist">
+            <button id="tLogin" class="on" type="button" role="tab">Đăng nhập</button>
+            <button id="tReg" type="button" role="tab">Đăng ký</button>
+          </div>
+          <div id="msg"></div>
+          <form id="fLogin" novalidate>
+            <div class="field"><label for="lEmail">Email</label><input id="lEmail" type="email" autocomplete="username" required></div>
+            <div class="field"><label for="lPw">Mật khẩu</label><input id="lPw" type="password" autocomplete="current-password" required></div>
+            <button class="primary" style="width:100%;margin-top:18px;min-height:44px" type="submit">Đăng nhập</button>
+          </form>
+          <form id="fReg" class="hidden" novalidate>
+            <div class="field"><label for="rRole">Tôi là</label>
+              <select id="rRole"><option value="sinh_vien">Sinh viên – đặt món</option><option value="chu_quan">Chủ quán – bán hàng</option></select></div>
+            <div class="field"><label for="rName">Họ tên</label><input id="rName" maxlength="100" autocomplete="name" required></div>
+            <div class="field"><label for="rEmail">Email</label><input id="rEmail" type="email" autocomplete="email" required></div>
+            <div class="field"><label for="rPw">Mật khẩu</label><input id="rPw" type="password" minlength="8" required autocomplete="new-password">
+              <div class="small muted">Từ 8 ký tự, có cả chữ và số</div></div>
+            <div class="field"><label for="rPhone">Số điện thoại (không bắt buộc)</label><input id="rPhone" maxlength="10" inputmode="numeric" autocomplete="tel" placeholder="0xxxxxxxxx"></div>
+            <fieldset id="rBank" class="bank-fields hidden">
+              <legend>Tài khoản nhận tiền</legend>
+              <p class="small muted">Sinh viên thanh toán trước bằng mã VietQR, tiền vào thẳng tài khoản này. Bạn bấm "Đã nhận tiền" thì đơn mới vào bếp. TDTU Food không giữ tiền, không thu phí.</p>
+              <div class="field"><label for="rBankBin">Ngân hàng</label><select id="rBankBin"><option value="">Chọn ngân hàng</option></select></div>
+              <div class="field"><label for="rBankAcc">Số tài khoản</label><input id="rBankAcc" maxlength="19" inputmode="numeric" autocomplete="off" placeholder="Chỉ gồm chữ số"></div>
+              <div class="field"><label for="rBankHolder">Tên chủ tài khoản</label><input id="rBankHolder" maxlength="60" autocomplete="off" placeholder="VD: NGUYEN VAN AN">
+                <div class="small muted">In hoa không dấu, đúng như app ngân hàng hiện khi chuyển tiền</div></div>
+            </fieldset>
+            <label class="check"><input id="rTerms" type="checkbox">
+              <span>Tôi đồng ý với <a href="dieu-khoan.html" target="_blank" rel="noopener">Điều khoản sử dụng</a> và
+                <a href="quyen-rieng-tu.html" target="_blank" rel="noopener">Chính sách quyền riêng tư</a></span></label>
+            <button class="primary" style="width:100%;margin-top:18px;min-height:44px" type="submit">Tạo tài khoản</button>
+          </form>
+          <div class="demo">Tài khoản demo (sau khi chạy <span class="mono">python manage.py seed</span>):<br>
+            <button class="sm" type="button" data-e="sv1@demo.tdtu.vn" data-p="Demo@123">Sinh viên</button>
+            <button class="sm" type="button" data-e="chuquan1@demo.tdtu.vn" data-p="Demo@123">Chủ quán</button>
+            <button class="sm" type="button" data-e="admin@demo.tdtu.vn" data-p="Admin@123">Admin</button>
+          </div>
+        </div>
+      </div>
     </div>
-    <div id="msg"></div>
-    <form id="fLogin" novalidate>
-      <div class="field"><label for="lEmail">Email</label><input id="lEmail" type="email" autocomplete="username" required></div>
-      <div class="field"><label for="lPw">Mật khẩu</label><input id="lPw" type="password" autocomplete="current-password" required></div>
-      <button class="primary" style="width:100%;margin-top:16px" type="submit">Đăng nhập</button>
-    </form>
-    <form id="fReg" class="hidden" novalidate>
-      <div class="field"><label for="rName">Họ tên</label><input id="rName" maxlength="100" required></div>
-      <div class="field"><label for="rEmail">Email</label><input id="rEmail" type="email" required></div>
-      <div class="field"><label for="rPw">Mật khẩu</label><input id="rPw" type="password" minlength="6" required autocomplete="new-password">
-        <div class="small muted">6 ký tự trở lên, tối đa 72 byte</div></div>
-      <div class="field"><label for="rPhone">Số điện thoại (không bắt buộc)</label><input id="rPhone" maxlength="10" placeholder="0xxxxxxxxx"></div>
-      <div class="field"><label for="rRole">Tôi là</label>
-        <select id="rRole"><option value="sinh_vien">Sinh viên – đặt món</option><option value="chu_quan">Chủ quán – bán hàng</option></select></div>
-      <button class="primary" style="width:100%;margin-top:16px" type="submit">Tạo tài khoản</button>
-    </form>
-    <div class="demo">Tài khoản demo (sau khi chạy <span class="mono">python manage.py seed</span>):<br>
-      <button class="sm" type="button" data-e="sv1@demo.tdtu.vn" data-p="Demo@123">Sinh viên</button>
-      <button class="sm" type="button" data-e="chuquan1@demo.tdtu.vn" data-p="Demo@123">Chủ quán</button>
-      <button class="sm" type="button" data-e="admin@demo.tdtu.vn" data-p="Admin@123">Admin</button>
-    </div>
+  </section>
+
+  <div class="ticker hidden" id="ticker" aria-hidden="true">
+    <div class="ticker-label"><span class="ticker-dot"></span><span class="ticker-label-text">Vừa cập nhật</span><span class="ticker-label-short">Mới</span></div>
+    <div class="ticker-viewport"><div class="ticker-track"></div></div>
   </div>
-</div>
-<script>
-(() => {
-  const show = (text, warn) => mount($("#msg"), text ? h("div", { class: "notice" + (warn ? " warn" : "") }, text) : "");
-  const params = new URLSearchParams(location.search);
-  if (params.has("expired")) show("Phiên đăng nhập đã hết hạn hoặc bị thu hồi, vui lòng đăng nhập lại.", true);
-  if (params.has("locked")) show("Tài khoản đã bị khóa. Liên hệ quản trị viên.", true);
 
-  const s = Session.get();
-  if (s && s.token && !params.has("expired") && !params.has("locked")) {
-    api("auth", "/api/users/me", { auth: true }).then(u => { location.href = HOME[u.role]; }).catch(() => Session.clear());
-  }
-  const tab = reg => {
-    $("#tLogin").classList.toggle("on", !reg); $("#tReg").classList.toggle("on", reg);
-    $("#fLogin").classList.toggle("hidden", reg); $("#fReg").classList.toggle("hidden", !reg); show("");
-  };
-  $("#tLogin").onclick = () => tab(false);
-  $("#tReg").onclick = () => tab(true);
+  <section class="landing-section" id="bang-tin">
+    <div class="wrap"><div id="board"></div></div>
+  </section>
 
-  async function doLogin(email, password, btn) {
-    const r = await act(btn, () => api("auth", "/api/users/login", { method: "POST", auth: false, body: { email, password } }));
-    Session.set({ token: r.access_token, user: r.user, exp: Date.now() + r.expires_in * 1000 });
-    location.href = HOME[r.user.role];
-  }
-  $("#fLogin").onsubmit = e => {
-    e.preventDefault();
-    const email = $("#lEmail").value.trim(), pw = $("#lPw").value;
-    if (!email || !pw) return show("Nhập email và mật khẩu", true);
-    doLogin(email, pw, e.submitter).catch(err => show(err.message, true));
-  };
-  $("#fReg").onsubmit = async e => {
-    e.preventDefault();
-    const body = { name: $("#rName").value.trim(), email: $("#rEmail").value.trim(), password: $("#rPw").value,
-                   role: $("#rRole").value };
-    if ($("#rPhone").value.trim()) body.phone = $("#rPhone").value.trim();
-    try {
-      await act(e.submitter, () => api("auth", "/api/users/register", { method: "POST", auth: false, body }));
-      await doLogin(body.email, body.password, null);
-    } catch (err) { show(err.message, true); }
-  };
-  document.querySelectorAll(".demo button").forEach(b => b.onclick = () => {
-    tab(false); $("#lEmail").value = b.dataset.e; $("#lPw").value = b.dataset.p;
-  });
-})();
-</script>
+  <section class="landing-section" id="tham-gia" style="padding-top:0">
+    <div class="wrap">
+      <h2>Một app cho cả người ăn lẫn người bán</h2>
+      <p class="sub">Quét mã bằng camera điện thoại để mở thẳng trang đăng ký. Mã QR in sẵn để dán ở quầy quán và bảng tin khoa.</p>
+      <div class="join">
+        <article class="card join-card">
+          <div>
+            <h3>Cho sinh viên</h3>
+            <ol class="steps">
+              <li>Chọn quán gần trường, xem thực đơn và đánh giá của bạn khác.</li>
+              <li>Đặt món, ghi chỗ nhận: cổng trường, ký túc xá hay phòng học.</li>
+              <li>Nhận thông báo khi quán xác nhận và làm xong, rồi chấm sao cho quán.</li>
+            </ol>
+            <a class="btn hot" href="?dang-ky=sinh-vien#dang-nhap" data-open="sinh_vien">Tạo tài khoản sinh viên</a>
+          </div>
+          <div class="qr"><img src="qr/sinh-vien.svg" alt="Mã QR đăng ký tài khoản sinh viên" width="140" height="140">Quét để đặt món</div>
+        </article>
+        <article class="card join-card owner">
+          <div>
+            <h3>Cho chủ quán</h3>
+            <ol class="steps">
+              <li>Tạo tài khoản chủ quán và gửi tên, địa chỉ, giờ mở cửa.</li>
+              <li>Ban quản trị duyệt quán, thường trong ngày.</li>
+              <li>Thêm món để lên bảng tin, nhận đơn, xác nhận và báo làm xong.</li>
+            </ol>
+            <a class="btn" href="?dang-ky=chu-quan#dang-nhap" data-open="chu_quan">Đăng ký mở quán</a>
+          </div>
+          <div class="qr"><img src="qr/chu-quan.svg" alt="Mã QR đăng ký tài khoản chủ quán" width="140" height="140">Quét để mở quán</div>
+        </article>
+      </div>
+      <p class="small muted" style="margin-top:16px"><a href="qr.html" target="_blank" rel="noopener">In áp phích mã QR</a> để dán ở quầy quán, căn tin hoặc bảng tin khoa.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <img src="assets/brand/tdtu-logo.png" alt="Logo Trường Đại học Tôn Đức Thắng" width="120" height="68">
+    <div>TDTU Food là đồ án môn học của sinh viên Trường Đại học Tôn Đức Thắng, không phải ứng dụng chính thức của trường.
+      Logo trường thuộc quyền sở hữu của Trường Đại học Tôn Đức Thắng.
+      <div class="foot-links"><a href="dieu-khoan.html">Điều khoản sử dụng</a><a href="quyen-rieng-tu.html">Chính sách quyền riêng tư</a></div></div>
+  </div>
+</footer>
+
+<script src="assets/landing.js"></script>
 </body>
 </html>

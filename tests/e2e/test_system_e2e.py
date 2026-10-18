@@ -47,7 +47,7 @@ class Cluster:
 
     def manage(self, *args, check=True, extra_env=None):
         r = subprocess.run([sys.executable, str(ROOT / "manage.py"), *args], env={**self.env, **(extra_env or {})},
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         if check and r.returncode != 0:
             logs = "\n".join(f"--- {p.name}\n{p.read_text()[-1500:]}" for p in (self.tmp / "logs").glob("*.log"))
             raise AssertionError(f"manage.py {args} lỗi:\n{r.stdout}\n{r.stderr}\n{logs}")
@@ -83,8 +83,10 @@ def login(c, email, pw="matkhau123"):
 
 
 def register(c, email, role):
-    r = requests.post(c.url["auth"] + "/api/users/register", timeout=10,
-                      json={"name": "Người Dùng E2E", "email": email, "password": "matkhau123", "role": role})
+    body = {"name": "Người Dùng E2E", "email": email, "password": "matkhau123", "role": role, "accept_terms": True}
+    if role == "chu_quan":                               # chủ quán khai báo tài khoản nhận tiền (VietQR)
+        body.update(bank_bin="970436", bank_account="0071000123456", bank_holder="Chủ Quán Thử Nghiệm")
+    r = requests.post(c.url["auth"] + "/api/users/register", timeout=10, json=body)
     assert r.status_code == 201, r.text
     return login(c, email)
 
@@ -141,14 +143,25 @@ def test_full_business_flow_restart_and_notification_outage(cluster):
     # giá đổi sau khi đặt không ảnh hưởng đơn
     requests.patch(u["restaurant"] + f"/api/menu-items/{items[0]}", headers=owner, json={"price": 50000}, timeout=10)
 
-    # chủ quán nhận thông báo, xác nhận, hoàn thành; người khác không xem được đơn
+    # thanh toán trước: mã VietQR vào tài khoản quán -> sinh viên báo đã chuyển -> quán xác nhận nhận tiền
+    pay = order["payment"]
+    assert (pay["status"], pay["amount"], pay["account"]) == ("unpaid", 95000, "0071000123456")
+    qr = requests.get(u["web"] + "/qr/vietqr.svg", timeout=10, params={"bin": pay["bank_bin"], "acc": pay["account"],
+                                                                         "amount": pay["amount"], "note": pay["note"]})
+    assert qr.status_code == 200 and qr.headers["content-type"].startswith("image/svg+xml")
+    assert requests.get(u["notification"] + "/api/notifications/me", headers=owner, timeout=10).json()["unread"] == 0
+    assert requests.post(u["order"] + f"/api/orders/{order['id']}/payment/claim", headers=sv, timeout=10).status_code == 200
+
+    # chủ quán nhận thông báo, xác nhận tiền, nhận đơn, hoàn thành; người khác không xem được đơn
     noti = requests.get(u["notification"] + "/api/notifications/me", headers=owner, timeout=10).json()
     assert noti["unread"] == 1 and "đơn mới" in noti["items"][0]["message"]
+    assert requests.post(u["order"] + f"/api/orders/{order['id']}/payment/confirm", headers=owner,
+                         timeout=10).json()["payment"]["status"] == "paid"
     assert requests.get(u["order"] + f"/api/orders/{order['id']}", headers=sv2, timeout=10).status_code == 403
     for st in ("confirmed", "completed"):
         assert requests.patch(u["order"] + f"/api/orders/{order['id']}/status", headers=owner, timeout=10,
                               json={"status": st}).status_code == 200
-    assert requests.get(u["notification"] + "/api/notifications/me", headers=sv, timeout=10).json()["unread"] == 2
+    assert requests.get(u["notification"] + "/api/notifications/me", headers=sv, timeout=10).json()["unread"] == 3
 
     # đánh giá + thống kê
     rv = requests.post(u["review"] + "/api/reviews", headers=sv, timeout=10,
@@ -175,6 +188,9 @@ def test_full_business_flow_restart_and_notification_outage(cluster):
     requests.post(u["order"] + "/api/cart/items", headers=sv, json={"restaurant_id": rid, "item_id": items[1]}, timeout=10)
     o3 = requests.post(u["order"] + "/api/orders/checkout", headers=sv, json={"delivery_address": "Thư viện TDTU"}, timeout=20)
     assert o3.status_code == 201, o3.text
+    for who, step in ((sv, "claim"), (owner, "confirm")):
+        assert requests.post(u["order"] + f"/api/orders/{o3.json()['id']}/payment/{step}", headers=who,
+                             timeout=20).status_code == 200
     failed = requests.get(u["order"] + "/api/admin/outbox", headers=admin, params={"status": "failed"}, timeout=10).json()
     assert any(f["order_id"] == o3.json()["id"] for f in failed)
     c.manage("stop")
@@ -182,20 +198,20 @@ def test_full_business_flow_restart_and_notification_outage(cluster):
     deadline = time.time() + 30
     while time.time() < deadline:
         msgs = requests.get(u["notification"] + "/api/notifications/me", headers=owner, timeout=10).json()["items"]
-        if sum(o3.json()["id"][:8].upper() in m["message"] for m in msgs) >= 1:
+        if sum(f"#{o3.json()['pickup_code']}" in m["message"] for m in msgs) >= 1:
             break
         time.sleep(1)
     msgs = requests.get(u["notification"] + "/api/notifications/me", headers=owner, timeout=10).json()["items"]
-    assert sum(o3.json()["id"][:8].upper() in m["message"] for m in msgs) == 1
+    assert sum(f"#{o3.json()['pickup_code']}" in m["message"] for m in msgs) == 1
     requests.post(u["order"] + "/api/admin/outbox/retry", headers=admin, timeout=10)
     msgs = requests.get(u["notification"] + "/api/notifications/me", headers=owner, timeout=10).json()["items"]
-    assert sum(o3.json()["id"][:8].upper() in m["message"] for m in msgs) == 1     # không nhân đôi
+    assert sum(f"#{o3.json()['pickup_code']}" in m["message"] for m in msgs) == 1     # không nhân đôi
 
 
 def test_negative_security_on_real_services(cluster):
     u = cluster.url
     assert requests.post(u["auth"] + "/api/users/register", timeout=10, json={"name": "Hacker", "email": "h@e2e.tdtu.vn",
-                         "password": "matkhau123", "role": "admin"}).status_code == 422
+                         "password": "matkhau123", "role": "admin", "accept_terms": True}).status_code == 422
     assert requests.get(u["order"] + "/api/orders/me", headers=H("sai.token.x"), timeout=10).status_code == 401
     assert requests.post(u["notification"] + "/internal/notifications/events", json={}, timeout=10).status_code == 403
     assert requests.post(u["restaurant"] + "/internal/quote", json={}, timeout=10).status_code == 403

@@ -123,6 +123,12 @@ try {
         jsonResponse(200, $reviews->setVisibility($id, $body['status'], $reason));
     }
 
+    // ---------------------------------------------------------- nội bộ (gateway chặn /internal từ Internet)
+    if ($phuongThuc === 'POST' && preg_match('#^/internal/users/([^/]+)/erase$#D', $duongDan, $m)) {
+        requireInternal();
+        jsonResponse(200, $reviews->eraseUser(uuidParam($m[1], 'user_id')));
+    }
+
     throw new ApiError(404, 'NOT_FOUND', 'Không tìm thấy API');
 } catch (ApiError $loi) {
     errorResponse($loi);

@@ -6,7 +6,7 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
 | CSDL | Service (ngôn ngữ) | Thư viện truy cập | Bảng | Nguồn schema |
 | --- | --- | --- | --- | --- |
 | `DATA_DIR/auth.db` (SQLite) | Auth (Python) | `sqlite3` | `users` | `services/auth/models.py` |
-| `DATA_DIR/restaurant.db` (SQLite) | Restaurant (Node.js) | `node:sqlite` | `restaurants`, `menu_items` | `services/restaurant/src/db.js` |
+| `DATA_DIR/restaurant.db` (SQLite) | Restaurant (Node.js) | `node:sqlite` | `restaurants`, `menu_items`, `menu_updates` | `services/restaurant/src/db.js` |
 | `DATA_DIR/order.mv.db` (H2 dạng tệp) | Order (Java) | Spring `JdbcTemplate` + HikariCP | `carts`, `cart_items`, `orders`, `order_items`, `notification_outbox` | `services/order/src/main/resources/schema.sql` |
 | PostgreSQL `tdtu_notification` | Notification (Go) | GORM + pgx | `notifications` | `services/notification/store.go` |
 | `DATA_DIR/review.db` (SQLite) | Review (PHP) | PDO | `reviews` | `services/review/src/Database.php` |
@@ -24,6 +24,14 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
 ## Chính sách giữ lịch sử
 
 - Không xóa cứng người dùng (khóa thay cho xóa), quán và món (xóa mềm `deleted_at`), đánh giá (ẩn `status=hidden`).
+- Yêu cầu xóa dữ liệu cá nhân (Chính sách quyền riêng tư, mục 8): admin gọi `POST /api/users/{id}/erase`, Auth khóa tài
+  khoản rồi gọi `/internal/users/{id}/erase` của Order (tên → "Người dùng đã xóa", xóa số điện thoại, chỗ nhận, ghi chú;
+  xóa giỏ), Restaurant (xóa mềm mọi quán của chủ quán, xóa ảnh), Review (ẩn danh tên người viết), Notification (xóa
+  thông báo), cuối cùng ẩn danh họ tên, email, số điện thoại trong `users` và ghi `erased_at`. Số tiền, món, số sao giữ
+  nguyên nên thống kê không đổi. Order từ chối khi còn đơn `pending`/`confirmed`.
+- Sao lưu: `scripts/backup.py` lấy bản sao nhất quán của cả 5 cơ sở dữ liệu khi hệ thống đang chạy (API backup của
+  SQLite, `BACKUP TO` của H2 qua `GET /internal/backup` của Order, `pg_dump`), kèm ảnh quán (`uploads/` của Restaurant)
+  và ảnh đại diện (`avatars/` của Auth); xem `docs/DEPLOY.md`.
 - Đơn lưu ảnh chụp `customer_name`, `restaurant_name`, `restaurant_owner_id`, `item_name`, `price`, `line_total`
   tại thời điểm đặt: đổi giá, đổi tên, xóa món/quán sau đó không làm thay đổi hoặc hỏng đơn cũ, và chủ quán vẫn xử lý
   được đơn mà không cần gọi Restaurant.
@@ -44,6 +52,11 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
 ## Máy trạng thái
 
 - Đơn: `pending → confirmed → completed`; `pending → cancelled`; `confirmed → cancelled`. `completed`, `cancelled` là trạng thái cuối.
+  Chỉ đơn đã thanh toán mới được xác nhận / hoàn thành.
+- Thanh toán của đơn (`payment_status`): `unpaid →(sinh viên báo đã chuyển) claimed →(quán: đã nhận tiền) paid`;
+  `claimed →(quán: chưa nhận được tiền) failed` (đơn hủy); `unpaid → void` (hủy) / `expired` (quá `PAYMENT_TIMEOUT_MINUTES`,
+  `cancelled_by = he_thong`); hủy đơn `paid` (hoặc admin hủy đơn `claimed`) → `refund_due →(quán: đã hoàn tiền) refunded`.
+  Báo cáo, thống kê chỉ tính đơn `paid / refund_due / refunded` (đơn đặt thành công).
 - Quán: `pending →(admin duyệt) active ↔(chủ quán) closed`; `* →(admin) locked →(admin) active`.
 - Outbox: `pending → sending → sent` hoặc `→ failed → sending → …` (tối đa 10 lần).
 
@@ -51,7 +64,9 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
 
 `python manage.py seed` (hệ thống phải đang chạy) nạp dữ liệu **qua REST API** của 5 service, nên dữ liệu demo đi qua
 đúng nghiệp vụ (đăng ký, duyệt quán, giỏ, checkout, đổi trạng thái, đánh giá, outbox → thông báo): 1 admin, 2 chủ quán,
-3 sinh viên (1 bị khóa), 4 quán (active, active, pending, closed), 10 món (có món hết, món ẩn), 6 đơn ở đủ 4 trạng thái,
+3 sinh viên (1 bị khóa), 4 quán (active, active, pending, closed), 10 món (có món hết, món ẩn), 7 đơn ở đủ 4 trạng thái
+(đơn đi qua bước thanh toán; 1 đơn đang chờ quán xác nhận tiền, 1 đơn đã trả bị admin hủy đang chờ hoàn tiền), chủ quán
+demo có tài khoản nhận tiền `TAI KHOAN DEMO` (số giả),
 2 đánh giá và các thông báo sinh ra từ sự kiện đơn. Chạy lại không tạo trùng. ID là UUID ngẫu nhiên.
 `python manage.py reset-demo --yes` **xóa** các tệp CSDL trong `DATA_DIR` và bảng `notifications` rồi start + seed lại.
 Test tự động dùng thư mục dữ liệu tạm và schema PostgreSQL tạm riêng, không đụng dữ liệu thật.
@@ -76,9 +91,23 @@ CREATE TABLE IF NOT EXISTS users (
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','locked')),
     token_version INTEGER NOT NULL DEFAULT 0,      -- tăng khi khóa/đổi vai trò/đăng xuất -> token cũ hết hiệu lực
     created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    updated_at    TEXT NOT NULL,
+    terms_accepted_at TEXT,                        -- lúc đồng ý Điều khoản + Chính sách quyền riêng tư (bằng chứng đồng ý)
+    erased_at     TEXT,                            -- lúc xóa dữ liệu cá nhân theo yêu cầu (tên/email/SĐT đã ẩn danh)
+    avatar_url    TEXT,                            -- /avatars/<tên ngẫu nhiên>.jpg|png|webp (tệp trong DATA_DIR/avatars)
+    -- tài khoản nhận tiền của chủ quán (thêm 16/10/2026): sinh viên chuyển khoản trước bằng mã VietQR tạo từ 3 cột này
+    bank_bin      TEXT,                            -- mã ngân hàng 6 số của Napas (services/auth/banks.py)
+    bank_account  TEXT,                            -- số tài khoản 6-19 chữ số
+    bank_holder   TEXT                             -- tên chủ tài khoản, in hoa không dấu
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+-- Đăng nhập sai liên tiếp theo cặp (email, IP): quá ngưỡng thì khóa tạm, chống dò mật khẩu
+CREATE TABLE IF NOT EXISTS login_attempts (
+    key          TEXT PRIMARY KEY,                 -- email|ip
+    fails        INTEGER NOT NULL,
+    window_start TEXT NOT NULL,
+    locked_until TEXT
+);
 ```
 
 ### Restaurant – restaurant.db (SQLite)
@@ -108,6 +137,7 @@ CREATE TABLE IF NOT EXISTS menu_items (
     name          TEXT NOT NULL,
     price         INTEGER NOT NULL CHECK (price >= 0),        -- VND, số nguyên
     description   TEXT,
+    category      TEXT,                                       -- danh mục: Món chính, Đồ uống...
     image_url     TEXT,
     status        TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','sold_out','hidden')),
     created_at    TEXT NOT NULL,
@@ -115,7 +145,27 @@ CREATE TABLE IF NOT EXISTS menu_items (
     deleted_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_menu_restaurant ON menu_items(restaurant_id);
+-- Bảng tin món mới: mỗi món một tin mới nhất. new = món mới, price = đổi giá, back = bán lại món đã hết/ẩn
+CREATE TABLE IF NOT EXISTS menu_updates (
+    item_id       TEXT PRIMARY KEY REFERENCES menu_items(id),
+    restaurant_id TEXT NOT NULL REFERENCES restaurants(id),
+    kind          TEXT NOT NULL CHECK (kind IN ('new','price','back')),
+    old_price     INTEGER,
+    new_price     INTEGER NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_menu_updates_created ON menu_updates(created_at);
 ```
+
+`menu_items.category` (tùy chọn, tối đa 50 ký tự) nhóm món theo danh mục ở thực đơn; DB cũ được tự thêm cột khi khởi
+động (`ALTER TABLE ... ADD COLUMN`). Ảnh quán / món (`image_url`) là đường dẫn `/uploads/<uuid>.jpg|png|webp` tới tệp
+trong `DATA_DIR/uploads/` (Restaurant tự phục vụ) hoặc link http(s); tệp ảnh cũ được xóa khi không còn quán/món nào dùng.
+
+`menu_updates` giữ **một dòng mỗi món** (khóa chính `item_id`), ghi trong cùng giao dịch với lệnh thêm/sửa món, chỉ khi
+món ở trạng thái `available`: lần đầu bán → `new`; đang bán đổi giá → `price` (kèm giá cũ); bán lại sau ít nhất 24 giờ
+hết/ẩn → `back`. Tin chưa quá 30 phút chỉ được cập nhật giá, không bị đẩy lên lại (chống spam). Admin duyệt quán →
+các món của quán lên bảng tin từ lúc duyệt. `GET /api/menu-updates` lấy tin trong 14 ngày, món đang bán của quán `active`,
+mỗi quán tối đa 3 tin. DB có từ trước được nạp các món đang bán làm tin `new` (`INSERT OR IGNORE`, chạy lại không trùng).
 
 ### Order – order.mv.db (H2)
 
@@ -189,6 +239,34 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     sent_at         VARCHAR(20)
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON notification_outbox(status, next_attempt_at);
+```
+
+Mã nhận món 3 chữ số (thêm 16/10/2026, `schema.sql` của Order):
+
+```sql
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_code VARCHAR(3);   -- 001-999, sinh viên đọc khi tới quán
+CREATE TABLE IF NOT EXISTS pickup_counters (                         -- số thứ tự đơn trong ngày của từng quán
+    restaurant_id VARCHAR(36) NOT NULL,
+    order_day     VARCHAR(10) NOT NULL,                              -- YYYY-MM-DD theo giờ Việt Nam
+    last_no       INT NOT NULL,
+    PRIMARY KEY (restaurant_id, order_day)
+);
+```
+
+Thanh toán trước bằng VietQR (thêm 16/10/2026, `schema.sql` của Order). Tài khoản nhận tiền của chủ quán được chụp vào
+đơn lúc đặt (lấy từ Auth `GET /internal/users/{id}/payout`), nên chủ quán đổi tài khoản không ảnh hưởng đơn cũ:
+
+```sql
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(16) DEFAULT 'paid' NOT NULL;   -- đơn cũ coi như đã trả
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_bank_bin VARCHAR(6);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_bank_name VARCHAR(80);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_account VARCHAR(19);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_holder VARCHAR(60);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_note VARCHAR(30);        -- nội dung chuyển khoản: TDTU <mã 3 số> <4 ký tự mã đơn>
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_deadline VARCHAR(20);    -- quá hạn mà chưa báo chuyển -> hệ thống hủy
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_claimed_at VARCHAR(20);  -- lúc sinh viên báo đã chuyển
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at VARCHAR(20);         -- lúc chủ quán xác nhận đã nhận tiền
+CREATE INDEX IF NOT EXISTS idx_orders_payment ON orders(payment_status, pay_deadline);
 ```
 
 ### Notification – PostgreSQL

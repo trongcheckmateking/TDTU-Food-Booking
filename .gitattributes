@@ -1,0 +1,7 @@
+# Tệp chạy trong container Linux phải giữ xuống dòng LF (CRLF làm hỏng script shell / cấu hình)
+*.sh text eol=lf
+*.envsh text eol=lf
+*.template text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+mvnw text eol=lf

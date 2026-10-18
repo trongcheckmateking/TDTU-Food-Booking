@@ -4,7 +4,8 @@
  * Node chạy 1 luồng và các lệnh DB là đồng bộ, nên mỗi khối giao dịch chạy trọn vẹn, không xen kẽ.
  *
  * Bảng RESTAURANTS, MENU_ITEMS (khớp ERD). Quán: pending/active/closed/locked + xóa mềm deleted_at.
- * Món: available/sold_out/hidden + xóa mềm. Tiền VND là số nguyên.
+ * Món: available/sold_out/hidden + xóa mềm, danh mục tùy chọn. Tiền VND là số nguyên.
+ * MENU_UPDATES: tin mới nhất của mỗi món (thêm món / đổi giá / bán lại) cho bảng tin của sinh viên.
  */
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS menu_items (
     name          TEXT NOT NULL,
     price         INTEGER NOT NULL CHECK (price >= 0),        -- VND, số nguyên
     description   TEXT,
+    category      TEXT,                                       -- danh mục: Món chính, Đồ uống...
     image_url     TEXT,
     status        TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','sold_out','hidden')),
     created_at    TEXT NOT NULL,
@@ -43,14 +45,38 @@ CREATE TABLE IF NOT EXISTS menu_items (
     deleted_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_menu_restaurant ON menu_items(restaurant_id);
+-- Bảng tin món mới: mỗi món một tin mới nhất. new = món mới, price = đổi giá, back = bán lại món đã hết/ẩn
+CREATE TABLE IF NOT EXISTS menu_updates (
+    item_id       TEXT PRIMARY KEY REFERENCES menu_items(id),
+    restaurant_id TEXT NOT NULL REFERENCES restaurants(id),
+    kind          TEXT NOT NULL CHECK (kind IN ('new','price','back')),
+    old_price     INTEGER,
+    new_price     INTEGER NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_menu_updates_created ON menu_updates(created_at);
 `;
+
+// Món đang bán từ trước khi có bảng tin (chưa có tin nào) được đưa lên bảng tin dưới dạng "món mới"
+const BACKFILL = `INSERT OR IGNORE INTO menu_updates (item_id, restaurant_id, kind, old_price, new_price, created_at)
+  SELECT id, restaurant_id, 'new', NULL, price, created_at FROM menu_items WHERE deleted_at IS NULL AND status = 'available'`;
+
+/** Tạo bảng còn thiếu và nâng cấp DB cũ (chạy lại nhiều lần không sao). */
+function migrate(conn) {
+  conn.exec(SCHEMA);
+  // DB tạo trước khi có danh mục món: thêm cột (SQLite không có ADD COLUMN IF NOT EXISTS)
+  if (!conn.prepare('PRAGMA table_info(menu_items)').all().some((c) => c.name === 'category')) {
+    conn.exec('ALTER TABLE menu_items ADD COLUMN category TEXT');
+  }
+  conn.exec(BACKFILL);
+}
 
 let db = null;
 
 function open(file = path.join(config.dataDir(), 'restaurant.db')) {
   db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 10000;');
-  db.exec(SCHEMA);
+  migrate(db);
   return db;
 }
 
@@ -93,4 +119,4 @@ function paginate(sql, args, page, pageSize, orderBy) {
   return { items, total, page, page_size: pageSize };
 }
 
-module.exports = { SCHEMA, open, close, one, all, run, transaction, check, newId, nowIso, paginate };
+module.exports = { SCHEMA, migrate, open, close, one, all, run, transaction, check, newId, nowIso, paginate };

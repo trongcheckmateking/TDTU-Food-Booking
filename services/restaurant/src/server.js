@@ -2,7 +2,7 @@
 /** Điểm khởi động: node src/server.js (hoặc npm start). Cổng lấy từ RESTAURANT_URL (mặc định 8002). */
 const config = require('./config');
 const db = require('./db');
-const { createApp } = require('./app');
+const { createApp, sweepUploads } = require('./app');
 
 function main() {
   config.internalKey();                  // dừng sớm nếu thiếu khóa nội bộ
@@ -12,6 +12,8 @@ function main() {
   const server = createApp().listen(port, host, () => {
     console.log(`Restaurant Service (Node.js ${process.version}) chạy tại http://${host}:${port}`);
   });
+  sweepUploads();
+  setInterval(sweepUploads, 3600e3).unref();          // dọn ảnh tải lên nhưng không dùng
   server.on('error', (e) => { console.error(`Không mở được cổng ${port}: ${e.message}`); process.exit(1); });
   const stop = () => server.close(() => { db.close(); process.exit(0); });
   process.on('SIGINT', stop);

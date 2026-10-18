@@ -344,8 +344,9 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test(\"201\", () => pm.response.to.have.status(201));",
-                  "pm.test(\"đơn pending, có ảnh chụp tên món\", () => { const o = pm.response.json();",
-                  "  pm.expect(o.status).to.eql(\"pending\"); pm.expect(o.items[0].item_name).to.be.a(\"string\"); });",
+                  "pm.test(\"đơn pending, chờ thanh toán, có ảnh chụp tên món\", () => { const o = pm.response.json();",
+                  "  pm.expect(o.status).to.eql(\"pending\"); pm.expect(o.payment.status).to.eql(\"unpaid\");",
+                  "  pm.expect(o.payment.account).to.be.a(\"string\"); pm.expect(o.items[0].item_name).to.be.a(\"string\"); });",
                   "pm.collectionVariables.set(\"order_id\", pm.response.json().id);"
                 ]
               }
@@ -416,7 +417,89 @@
           ]
         },
         {
-          "name": "10. Chủ quán xác nhận",
+          "name": "10. Sinh viên quét VietQR, báo đã chuyển khoản",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/payment/claim",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "payment",
+                "claim"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"claimed\", () => pm.expect(pm.response.json().payment.status).to.eql(\"claimed\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11. Chủ quán thấy tiền vào: Đã nhận tiền",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/payment/confirm",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "payment",
+                "confirm"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"paid\", () => pm.expect(pm.response.json().payment.status).to.eql(\"paid\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "12. Chủ quán nhận đơn",
           "request": {
             "method": "PATCH",
             "header": [],
@@ -465,7 +548,7 @@
           ]
         },
         {
-          "name": "11. Chủ quán hoàn thành",
+          "name": "13. Chủ quán hoàn thành",
           "request": {
             "method": "PATCH",
             "header": [],
@@ -514,7 +597,7 @@
           ]
         },
         {
-          "name": "12. Sinh viên xem thông báo chưa đọc",
+          "name": "14. Sinh viên xem thông báo chưa đọc",
           "request": {
             "method": "GET",
             "header": [],
@@ -559,7 +642,7 @@
           ]
         },
         {
-          "name": "13. Sinh viên đánh giá",
+          "name": "15. Sinh viên đánh giá",
           "request": {
             "method": "POST",
             "header": [],
@@ -606,7 +689,7 @@
           ]
         },
         {
-          "name": "14. Điểm trung bình quán",
+          "name": "16. Điểm trung bình quán",
           "request": {
             "method": "GET",
             "header": [],
@@ -640,7 +723,7 @@
           ]
         },
         {
-          "name": "15. Admin thống kê",
+          "name": "17. Admin thống kê",
           "request": {
             "method": "GET",
             "header": [],
@@ -680,7 +763,7 @@
           ]
         },
         {
-          "name": "16. Không có token -> 401",
+          "name": "18. Không có token -> 401",
           "request": {
             "method": "GET",
             "header": [],
@@ -774,7 +857,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"email\": \"sv.moi@student.tdtu.edu.vn\",\n  \"password\": \"matkhau123\"\n}",
+              "raw": "{\n  \"name\": \"Tên mẫu\",\n  \"email\": \"sv.moi@student.tdtu.edu.vn\",\n  \"password\": \"matkhau123\",\n  \"accept_terms\": \"giá trị\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -784,7 +867,7 @@
           }
         },
         {
-          "name": "POST /api/users/login – Đăng nhập, nhận access_token",
+          "name": "POST /api/users/login – Đăng nhập, nhận access_token. Sai 5 lần trong 15 phút (cùng email + IP) thì khóa tạm 15 phút (429)",
           "request": {
             "method": "POST",
             "header": [],
@@ -892,6 +975,221 @@
                 "api",
                 "users",
                 "logout"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/me/password – Đổi mật khẩu: các phiên đăng nhập khác bị thu hồi, trả token mới cho phiên hiện tại",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/me/password",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me",
+                "password"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"giá trị\",\n  \"new_password\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/banks – Ngân hàng nhận tiền qua mã VietQR (cho form đăng ký chủ quán)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/banks",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "banks"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/users/me/payout – Chủ quán đổi tài khoản nhận tiền (cần nhập lại mật khẩu)",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/me/payout",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me",
+                "payout"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bank_bin\": \"giá trị\",\n  \"bank_account\": \"giá trị\",\n  \"bank_holder\": \"giá trị\",\n  \"password\": \"matkhau123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /internal/users/{user_id}/payout – Tài khoản nhận tiền của chủ quán (Order chụp vào đơn lúc đặt để tạo mã VietQR)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{auth_url}}/internal/users/{{user_id}}/payout",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "internal",
+                "users",
+                "{{user_id}}",
+                "payout"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "PUT /api/users/me/avatar – Đổi ảnh đại diện: gửi thẳng nội dung ảnh JPEG/PNG/WebP (tối đa 1 MB), ảnh cũ bị xóa",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/me/avatar",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me",
+                "avatar"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/users/me/avatar – Gỡ ảnh đại diện",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/me/avatar",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me",
+                "avatar"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /avatars/{name} – Tệp ảnh đại diện (đường dẫn lấy từ avatar_url)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/avatars/{name}",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "avatars",
+                "{name}"
               ]
             },
             "auth": {
@@ -1034,6 +1332,35 @@
                   "language": "json"
                 }
               }
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/{user_id}/erase – Xóa dữ liệu cá nhân theo yêu cầu của người dùng (admin)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/{{user_id}}/erase",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "{{user_id}}",
+                "erase"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
             }
           }
         }
@@ -1330,6 +1657,33 @@
           }
         },
         {
+          "name": "GET /api/menu-updates – Bảng tin món mới (công khai): tin 14 ngày gần nhất của món đang bán, quán đang hoạt động; mỗi món một tin, mỗi quán tối đa 3 tin",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/menu-updates",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "menu-updates"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "GET /api/menu-items/{mid} – Chi tiết 1 món",
           "request": {
             "method": "GET",
@@ -1416,6 +1770,60 @@
                 {
                   "key": "token",
                   "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/uploads – Chủ quán tải ảnh (ảnh bìa quán, ảnh món). Thân request là dữ liệu ảnh JPEG/PNG/WebP, tối đa 2 MB, tối đa 60 ảnh mỗi giờ; định dạng kiểm tra theo nội dung tệp",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/api/uploads",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "api",
+                "uploads"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /uploads/{file} – Ảnh đã tải lên (công khai, cache lâu dài)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{restaurant_url}}/uploads/{file}",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "uploads",
+                "{file}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
                   "type": "string"
                 }
               ]
@@ -1543,6 +1951,33 @@
                 "owners",
                 "{{user_id}}",
                 "restaurant-count"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /internal/users/{user_id}/erase – Xóa dữ liệu cá nhân của một tài khoản (Auth điều phối)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurant_url}}/internal/users/{{user_id}}/erase",
+              "host": [
+                "{{restaurant_url}}"
+              ],
+              "path": [
+                "internal",
+                "users",
+                "{{user_id}}",
+                "erase"
               ]
             },
             "auth": {
@@ -1843,6 +2278,35 @@
           }
         },
         {
+          "name": "GET /api/orders/owner/stats – Báo cáo cho chủ quán: đơn, doanh thu (đơn hoàn thành) theo ngày giờ Việt Nam, món bán chạy, đơn đang chờ",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/owner/stats",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "owner",
+                "stats"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "GET /api/orders/{oid} – Chi tiết đơn (người đặt, chủ quán của đơn, admin)",
           "request": {
             "method": "GET",
@@ -1871,7 +2335,7 @@
           }
         },
         {
-          "name": "PATCH /api/orders/{oid}/status – Đổi trạng thái: chủ quán xác nhận/hoàn thành/hủy; sinh viên hủy khi pending; admin chỉ hủy",
+          "name": "PATCH /api/orders/{oid}/status – Đổi trạng thái: chủ quán xác nhận/hoàn thành/hủy đơn đã thanh toán; admin chỉ hủy; sinh viên chỉ bỏ đơn chưa thanh toán",
           "request": {
             "method": "PATCH",
             "header": [],
@@ -1922,6 +2386,35 @@
                 "api",
                 "admin",
                 "orders"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/admin/orders/report – Báo cáo toàn hệ thống (admin): đơn, doanh thu đơn hoàn thành theo ngày giờ Việt Nam, món bán chạy, đơn đang chờ; cùng dạng báo cáo chủ quán",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/admin/orders/report",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "orders",
+                "report"
               ]
             },
             "auth": {
@@ -2045,6 +2538,187 @@
             },
             "auth": {
               "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /internal/users/{uid}/erase – Xóa dữ liệu cá nhân của một tài khoản (Auth điều phối)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{order_url}}/internal/users/{uid}/erase",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "internal",
+                "users",
+                "{uid}",
+                "erase"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "GET /internal/backup – Bản sao lưu DB H2 khi service đang chạy (lệnh BACKUP TO), cho scripts/backup.py",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{order_url}}/internal/backup",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "internal",
+                "backup"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /api/orders/{oid}/payment/claim – Sinh viên: tôi đã chuyển khoản",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/payment/claim",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "payment",
+                "claim"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_sv}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/orders/{oid}/payment/confirm – Chủ quán: đã nhận tiền",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/payment/confirm",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "payment",
+                "confirm"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/orders/{oid}/payment/reject – Chủ quán: chưa nhận được tiền",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/payment/reject",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "payment",
+                "reject"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Lý do mẫu\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /api/orders/{oid}/payment/refunded – Chủ quán: đã hoàn tiền",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{order_url}}/api/orders/{{order_id}}/payment/refunded",
+              "host": [
+                "{{order_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "{{order_id}}",
+                "payment",
+                "refunded"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_owner}}",
+                  "type": "string"
+                }
+              ]
             }
           }
         }
@@ -2264,6 +2938,33 @@
                   "type": "string"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "POST /internal/users/{uid}/erase – Xóa dữ liệu cá nhân của một tài khoản (Auth điều phối)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notification_url}}/internal/users/{uid}/erase",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "internal",
+                "users",
+                "{uid}",
+                "erase"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
             }
           }
         }
@@ -2523,6 +3224,33 @@
                   "language": "json"
                 }
               }
+            }
+          }
+        },
+        {
+          "name": "POST /internal/users/{user_id}/erase – Xóa dữ liệu cá nhân của một tài khoản (Auth điều phối)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{review_url}}/internal/users/{{user_id}}/erase",
+              "host": [
+                "{{review_url}}"
+              ],
+              "path": [
+                "internal",
+                "users",
+                "{{user_id}}",
+                "erase"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
             }
           }
         }

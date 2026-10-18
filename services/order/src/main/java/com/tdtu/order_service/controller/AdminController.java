@@ -1,6 +1,7 @@
 package com.tdtu.order_service.controller;
 
 import com.tdtu.order_service.client.AuthClient;
+import com.tdtu.order_service.model.Payment;
 import com.tdtu.order_service.service.OrderService;
 import com.tdtu.order_service.service.OutboxService;
 import com.tdtu.order_service.web.Json;
@@ -29,13 +30,22 @@ public class AdminController {
                                     @RequestParam(name = "user_id", required = false) String userId,
                                     @RequestParam(name = "date_from", required = false) String dateFrom,
                                     @RequestParam(name = "date_to", required = false) String dateTo,
+                                    @RequestParam(name = "payment_status", required = false) String paymentStatus,
                                     @RequestParam(required = false) String page,
                                     @RequestParam(name = "page_size", required = false) String pageSize) {
         auth.require(req, "admin");
         return orders.adminOrders(Json.enumQuery(status, "status", OrderController.STATUSES),
                 Json.uuidQuery(restaurantId, "restaurant_id"), Json.uuidQuery(userId, "user_id"),
-                Json.dateQuery(dateFrom, "date_from"), Json.dateQuery(dateTo, "date_to"),
+                Json.dateQuery(dateFrom, "date_from"), Json.dateQuery(dateTo, "date_to"), Payment.parseFilter(paymentStatus),
                 Json.intQuery(page, "page", 1, 1, 100000), Json.intQuery(pageSize, "page_size", 20, 1, 100));
+    }
+
+    @GetMapping("/orders/report")
+    public Map<String, Object> report(HttpServletRequest req,
+                                      @RequestParam(name = "restaurant_id", required = false) String restaurantId,
+                                      @RequestParam(required = false) String days) {
+        auth.require(req, "admin");
+        return orders.adminReport(Json.uuidQuery(restaurantId, "restaurant_id"), Json.intQuery(days, "days", 7, 1, 31));
     }
 
     @GetMapping("/orders/stats")

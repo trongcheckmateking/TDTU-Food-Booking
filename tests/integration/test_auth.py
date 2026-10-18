@@ -21,29 +21,38 @@ def test_register_login_me_and_profile(system):
 
 
 def test_register_validation(system):
-    base = {"name": "Người Dùng", "email": system.email("a@student.tdtu.edu.vn"), "password": "matkhau123"}
+    base = {"name": "Người Dùng", "email": system.email("a@student.tdtu.edu.vn"), "password": "matkhau123",
+            "accept_terms": True}
+    without_terms = {k: v for k, v in base.items() if k != "accept_terms"}
     cases = [
         {**base, "role": "admin"},                         # không tự đăng ký admin
         {**base, "status": "active"},                      # trường lạ bị chặn
         {**base, "name": "    "},                          # chỉ khoảng trắng
-        {**base, "password": "ệ" * 25},                    # 75 byte > giới hạn bcrypt
-        {**base, "password": "      "},
+        {**base, "password": "ệ" * 24 + "1"},              # 73 byte > giới hạn bcrypt
+        {**base, "password": "        "},
+        {**base, "password": "abc123"},                    # dưới 8 ký tự
+        {**base, "password": "chiconchu"},                 # không có số
+        {**base, "password": "12345678"},                  # không có chữ
         {**base, "email": "khong-phai-email"},
         {**base, "phone": "123"},
+        without_terms,                                      # chưa đồng ý điều khoản
+        {**base, "accept_terms": False},
+        {**base, "accept_terms": "true"},                  # phải là boolean JSON
     ]
     for body in cases:
         r = system.auth.post("/api/users/register", json=body)
         assert r.status_code == 422, (body, r.text)
         assert r.json()["code"] == "VALIDATION_ERROR"
-    ok = system.auth.post("/api/users/register", json={**base, "password": "ệ" * 24})    # đúng 72 byte
+    pw72 = "ệ" * 23 + "123"                                                            # đúng 72 byte
+    ok = system.auth.post("/api/users/register", json={**base, "password": pw72})
     assert ok.status_code == 201
-    assert system.login(base["email"], "ệ" * 24)
+    assert system.login(base["email"], pw72)
 
 
 def test_duplicate_email_case_insensitive(system):
     system.register(system.email("dup@student.tdtu.edu.vn"))
     r = system.auth.post("/api/users/register", json={"name": "Khác", "email": system.email("dup@student.tdtu.edu.vn").upper(),
-                                                      "password": "matkhau123"})
+                                                      "password": "matkhau123", "accept_terms": True})
     assert r.status_code == 409 and r.json()["code"] == "EMAIL_EXISTS"
 
 
@@ -54,6 +63,49 @@ def test_login_errors(system):
         r = system.auth.post("/api/users/login", json=body)
         assert r.status_code == 401 and r.json()["code"] == "INVALID_CREDENTIALS"
     assert system.auth.post("/api/users/login", json={"email": x, "password": "ệ" * 30}).status_code == 401
+
+
+def test_login_lockout_after_repeated_failures(system):
+    y, z = system.email("lock.y@student.tdtu.edu.vn"), system.email("lock.z@student.tdtu.edu.vn")
+    system.register(y)
+    system.register(z)
+    for _ in range(5):                                    # 5 lần sai liên tiếp
+        r = system.auth.post("/api/users/login", json={"email": y, "password": "sai12345"})
+        assert r.status_code == 401
+    r = system.auth.post("/api/users/login", json={"email": y, "password": "matkhau123"})
+    assert r.status_code == 429 and r.json()["code"] == "TOO_MANY_ATTEMPTS", "đúng mật khẩu cũng phải chờ"
+    assert int(r.headers["Retry-After"]) > 0
+    assert system.login(z)                                # tài khoản khác không bị ảnh hưởng
+    # đăng nhập đúng xóa bộ đếm: 4 lần sai, đúng 1 lần, rồi 4 lần sai nữa vẫn chưa bị khóa
+    for _ in range(4):
+        assert system.auth.post("/api/users/login", json={"email": z, "password": "sai12345"}).status_code == 401
+    assert system.login(z)
+    for _ in range(4):
+        assert system.auth.post("/api/users/login", json={"email": z, "password": "sai12345"}).status_code == 401
+    assert system.login(z)
+    # email không tồn tại cũng bị đếm (không lộ email nào có tài khoản)
+    ghost = system.email("ghost@student.tdtu.edu.vn")
+    codes = [system.auth.post("/api/users/login", json={"email": ghost, "password": "x"}).status_code for _ in range(6)]
+    assert codes == [401] * 5 + [429]
+
+
+def test_login_lockout_holds_under_parallel_guesses(system):
+    """30 lần đoán gửi cùng lúc: lần thử được giữ chỗ trước khi kiểm tra mật khẩu nên chỉ đúng 5 lần được thử."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import requests
+    v = system.email("lock.par@student.tdtu.edu.vn")
+    system.register(v)
+    url = system.c.url["auth"] + "/api/users/login"
+
+    def guess(_):
+        with requests.Session() as s:
+            s.trust_env = False
+            return s.post(url, json={"email": v, "password": "sai12345"}, timeout=60).status_code
+
+    with ThreadPoolExecutor(30) as ex:
+        codes = list(ex.map(guess, range(30)))
+    assert codes.count(401) == 5 and codes.count(429) == 25, codes
 
 
 def _token(sub, **over):
@@ -194,3 +246,88 @@ def test_demote_owner_with_restaurants_blocked(world):
     assert s.auth.patch(f"/api/users/{sv_id}/role", headers=world.admin, json={"role": "chu_quan"}).status_code == 200
     r = s.auth.patch(f"/api/users/{sv_id}/role", headers=world.admin, json={"role": "sinh_vien"})
     assert r.status_code == 503 and r.json()["code"] == "UPSTREAM_UNAVAILABLE"
+
+
+PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000040000000308020000003b963991000000104944415478"
+                    "9c6310f5980b470c383900de4b0bb9545d06570000000049454e44ae426082")
+
+
+def test_avatar_upload_replace_serve_and_remove(system):
+    h = system.user(system.email("avatar@student.tdtu.edu.vn"))
+    up = lambda data, ctype="image/png": system.auth.request("PUT", "/api/users/me/avatar",
+                                                             headers={**h, "Content-Type": ctype}, content=data)
+    assert system.auth.request("PUT", "/api/users/me/avatar", content=PNG,
+                               headers={"Content-Type": "image/png"}).status_code == 401
+    assert up(b"<svg onload=alert(1)>", "image/png").json()["code"] == "UNSUPPORTED_MEDIA_TYPE"   # kiểm tra theo nội dung
+    assert up(PNG + b"0" * (1024 * 1024)).status_code == 413
+    first = up(PNG).json()["avatar_url"]
+    assert first.startswith("/avatars/") and first.endswith(".png")
+    got = system.auth.get(first)
+    assert got.status_code == 200 and got.content == PNG
+    assert got.headers["content-type"] == "image/png" and got.headers["x-content-type-options"] == "nosniff"
+    second = up(PNG).json()["avatar_url"]
+    assert second != first and system.auth.get(first).status_code == 404                     # ảnh cũ bị xóa
+    assert system.auth.get("/api/users/me", headers=h).json()["avatar_url"] == second
+    assert system.auth.get("/avatars/..%2Fauth.db").status_code == 404
+    assert system.auth.delete("/api/users/me/avatar", headers=h).json()["avatar_url"] is None
+    assert system.auth.get(second).status_code == 404
+
+
+def test_change_password_revokes_other_sessions(system):
+    email = system.email("doimk@student.tdtu.edu.vn")
+    h = system.user(email)
+    other = system.login(email)                                                                # thiết bị thứ 2
+    change = lambda cur, new: system.auth.post("/api/users/me/password", headers=h,
+                                               json={"current_password": cur, "new_password": new})
+    assert change("sai12345", "matkhau456").json()["code"] == "WRONG_PASSWORD"
+    assert change("matkhau123", "chiconchu").status_code == 422                                 # thiếu số
+    assert change("matkhau123", "matkhau123").json()["code"] == "SAME_PASSWORD"
+    r = change("matkhau123", "matkhau456")
+    assert r.status_code == 200, r.text
+    assert system.auth.get("/api/users/me", headers=other).status_code == 401                 # phiên khác bị thu hồi
+    assert system.auth.get("/api/users/me", headers={"Authorization": "Bearer " + r.json()["access_token"]}).status_code == 200
+    assert system.auth.post("/api/users/login", json={"email": email, "password": "matkhau123"}).status_code == 401
+    assert system.login(email, "matkhau456")
+
+
+def test_owner_registers_with_payout_account(system):
+    """Chủ quán phải khai báo ngân hàng + số tài khoản + tên chủ tài khoản: mã VietQR của quán tạo từ đó."""
+    banks = system.auth.get("/api/banks").json()
+    assert {"bin": "970436", "code": "VCB", "name": "Vietcombank"} in banks and len({b["bin"] for b in banks}) == len(banks)
+    base = {"name": "Chủ Quán", "email": system.email("cq@test.tdtu.vn"), "password": "matkhau123", "role": "chu_quan",
+            "accept_terms": True}
+    bank = {"bank_bin": "970436", "bank_account": "0071000123456", "bank_holder": "  Trần   Thị Bé "}
+    for body, field in (({**base}, "bank_bin"), ({**base, **bank, "bank_bin": "999999"}, "bank_bin"),
+                        ({**base, **bank, "bank_account": "12a456"}, "bank_account"),
+                        ({**base, **bank, "bank_account": "12345"}, "bank_account"),
+                        ({**base, **bank, "bank_holder": "Trần 3"}, "bank_holder"),
+                        ({**base, **bank, "role": "sinh_vien"}, "bank_bin")):        # sinh viên không khai báo
+        r = system.auth.post("/api/users/register", json=body)
+        assert r.status_code == 422 and field in {e["field"] for e in r.json()["errors"]}, (body, r.text)
+    u = system.auth.post("/api/users/register", json={**base, **bank}).json()
+    assert (u["bank_bin"], u["bank_name"], u["bank_account"], u["bank_holder"]) == (
+        "970436", "Vietcombank", "0071000123456", "TRAN THI BE")
+    sv = system.register(system.email("svbank@student.tdtu.edu.vn"))
+    assert sv["bank_account"] is None and sv["bank_name"] is None
+
+
+def test_payout_change_needs_password_and_internal_lookup_needs_key(system):
+    from tests.conftest import INTERNAL
+    email = system.email("cq2@test.tdtu.vn")
+    h = system.user(email, "chu_quan")
+    uid = system.auth.get("/api/users/me", headers=h).json()["id"]
+    new = {"bank_bin": "970422", "bank_account": "0123456789", "bank_holder": "Nguyễn Đạt"}
+    r = system.auth.put("/api/users/me/payout", headers=h, json={**new, "password": "sai12345"})
+    assert r.status_code == 400 and r.json()["code"] == "WRONG_PASSWORD"
+    assert system.auth.put("/api/users/me/payout", headers=h, json=new).status_code == 422
+    r = system.auth.put("/api/users/me/payout", headers=h, json={**new, "password": "matkhau123"})
+    assert r.status_code == 200 and r.json()["bank_holder"] == "NGUYEN DAT"
+    sv = system.user(system.email("svpay@student.tdtu.edu.vn"))
+    assert system.auth.put("/api/users/me/payout", headers=sv, json={**new, "password": "matkhau123"}).status_code == 403
+    assert system.auth.get(f"/internal/users/{uid}/payout").status_code == 403
+    got = system.auth.get(f"/internal/users/{uid}/payout", headers=INTERNAL).json()
+    assert got == {"user_id": uid, "bank_bin": "970422", "bank_name": "MB Bank", "bank_account": "0123456789",
+                   "bank_holder": "NGUYEN DAT"}
+    sv_id = system.auth.get("/api/users/me", headers=sv).json()["id"]
+    r = system.auth.get(f"/internal/users/{sv_id}/payout", headers=INTERNAL)
+    assert r.status_code == 404 and r.json()["code"] == "PAYOUT_MISSING"

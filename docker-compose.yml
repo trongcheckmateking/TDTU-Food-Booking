@@ -1,0 +1,186 @@
+# TDTU Food Booking chạy bằng Docker: 5 service (5 ngôn ngữ, mỗi service một cơ sở dữ liệu riêng) + giao diện web
+# + PostgreSQL + gateway HTTPS (một tên miền) + container sao lưu tự động. Hướng dẫn đầy đủ: docs/DEPLOY.md
+#
+#   python manage.py init-env               lần đầu: tạo .env (JWT_SECRET, INTERNAL_KEY, POSTGRES_PASSWORD)
+#   docker compose up -d --build            build và chạy; mở https://<SERVER_NAME>
+#   docker compose exec auth python -m services.auth.admin_tools --email <email> --name "<họ tên>"
+#
+# Chỉ gateway mở cổng ra ngoài (HTTP_PORT, HTTPS_PORT). Service và PostgreSQL chỉ gọi được trong mạng nội bộ.
+name: tdtu-food
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }        # log mỗi container tối đa ~50 MB
+
+x-service: &service
+  restart: unless-stopped
+  logging: *logging
+  env_file: .env                                     # JWT_SECRET, INTERNAL_KEY, TOKEN_HOURS, LOGIN_*, ...
+  security_opt: ["no-new-privileges:true"]
+  networks: [backend]
+
+# Ghi đè giá trị chạy local trong .env (127.0.0.1, data/...) bằng giá trị trong mạng Docker
+x-env: &env
+  AUTH_URL: http://auth:8001
+  RESTAURANT_URL: http://restaurant:8002
+  ORDER_URL: http://order:8003
+  NOTIFICATION_URL: http://notification:8004
+  REVIEW_URL: http://review:8005
+  CORS_ORIGINS: ${PUBLIC_ORIGIN:-https://localhost}
+  DATA_DIR: /data
+  BIND_HOST: 0.0.0.0
+  TDTU_ENV_FILE: /nonexistent/.env
+  TZ: Asia/Ho_Chi_Minh
+
+x-healthy: &healthy
+  condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: tdtu_food
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Thiếu POSTGRES_PASSWORD trong .env - chạy python manage.py init-env}
+      POSTGRES_DB: tdtu_notification
+      TZ: Asia/Ho_Chi_Minh
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tdtu_food -d tdtu_notification"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  auth:
+    <<: *service
+    build: { context: ., dockerfile: services/auth/Dockerfile }
+    image: tdtu-food/auth
+    environment: { <<: *env }
+    volumes: [auth-data:/data]
+
+  restaurant:
+    <<: *service
+    build: services/restaurant
+    image: tdtu-food/restaurant
+    environment: { <<: *env }
+    volumes: [restaurant-data:/data]
+
+  order:
+    <<: *service
+    build: services/order
+    image: tdtu-food/order
+    environment: { <<: *env }
+    volumes: [order-data:/data]
+    stop_grace_period: 20s
+
+  notification:
+    <<: *service
+    build: services/notification
+    image: tdtu-food/notification
+    environment:
+      <<: *env
+      NOTIFICATION_DB_URL: postgres://tdtu_food:${POSTGRES_PASSWORD}@postgres:5432/tdtu_notification?sslmode=disable
+    depends_on: { postgres: *healthy }
+
+  review:
+    <<: *service
+    build: services/review
+    image: tdtu-food/review
+    environment: { <<: *env }
+    volumes: [review-data:/data]
+
+  web:
+    <<: *service
+    build: { context: ., dockerfile: web/Dockerfile }
+    image: tdtu-food/web
+    environment:
+      <<: *env
+      PUBLIC_WEB_URL: ${PUBLIC_ORIGIN:-https://localhost}        # mã QR trỏ tới đây
+      # trình duyệt gọi API qua gateway, cùng tên miền với trang -> không cần CORS, CSP chỉ cho 'self'
+      PUBLIC_AUTH_URL: /svc/auth
+      PUBLIC_RESTAURANT_URL: /svc/restaurant
+      PUBLIC_ORDER_URL: /svc/order
+      PUBLIC_NOTIFICATION_URL: /svc/notification
+      PUBLIC_REVIEW_URL: /svc/review
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+
+  gateway:
+    build: deploy/gateway
+    image: tdtu-food/gateway
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      SERVER_NAME: ${SERVER_NAME:-localhost}
+      HTTPS_PORT: ${HTTPS_PORT:-443}
+      TZ: Asia/Ho_Chi_Minh
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - gateway-certs:/etc/nginx/certs
+      - letsencrypt:/etc/letsencrypt:ro
+      - acme:/var/www/acme:ro
+    depends_on:
+      web: *healthy
+      auth: *healthy
+      restaurant: *healthy
+      order: *healthy
+      notification: *healthy
+      review: *healthy
+    networks: [backend]
+
+  backup:
+    build: { context: ., dockerfile: deploy/backup/Dockerfile }
+    image: tdtu-food/backup
+    restart: unless-stopped
+    logging: *logging
+    # không nạp cả .env: container này không cần JWT_SECRET, chỉ cần khóa nội bộ (gọi /internal/backup của Order)
+    # và chuỗi kết nối PostgreSQL. Volume dữ liệu gắn đọc-ghi vì SQLite (WAL) cần ghi tệp -shm khi đọc và để khôi phục.
+    environment:
+      <<: *env
+      INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY trong .env - chạy python manage.py init-env}
+      NOTIFICATION_DB_URL: postgres://tdtu_food:${POSTGRES_PASSWORD}@postgres:5432/tdtu_notification?sslmode=disable
+      AUTH_DATA_DIR: /data/auth
+      RESTAURANT_DATA_DIR: /data/restaurant
+      ORDER_DATA_DIR: /data/order
+      REVIEW_DATA_DIR: /data/review
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+    volumes:
+      - auth-data:/data/auth
+      - restaurant-data:/data/restaurant
+      - order-data:/data/order
+      - review-data:/data/review
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+    depends_on:
+      auth: *healthy
+      restaurant: *healthy
+      order: *healthy
+      notification: *healthy
+      review: *healthy
+    networks: [backend]
+
+  # Lấy chứng chỉ Let's Encrypt cho tên miền thật (xem docs/DEPLOY.md):
+  #   docker compose --profile letsencrypt run --rm certbot certonly --webroot -w /var/www/acme -d <tên miền> ...
+  certbot:
+    image: certbot/certbot:v4.0.0
+    profiles: [letsencrypt]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - acme:/var/www/acme
+
+networks:
+  backend: {}
+
+volumes:
+  pg-data: {}
+  auth-data: {}
+  restaurant-data: {}
+  order-data: {}
+  review-data: {}
+  gateway-certs: {}
+  letsencrypt: {}
+  acme: {}

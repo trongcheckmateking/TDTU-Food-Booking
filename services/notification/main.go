@@ -93,6 +93,7 @@ func newRouter(db *gorm.DB, internalKey string, origins map[string]bool, quiet b
 	r.GET("/redoc", func(c *gin.Context) { c.Data(200, "text/html; charset=utf-8", []byte(docsPage("redoc"))) })
 
 	r.POST("/internal/notifications/events", requireInternal(internalKey), s.receiveEvent)
+	r.POST("/internal/users/:uid/erase", requireInternal(internalKey), s.eraseUser)
 	r.GET("/api/notifications/me", requireUser(), s.myNotifications)
 	r.PATCH("/api/notifications/me/read-all", requireUser(), s.readAll)
 	r.PATCH("/api/notifications/:nid/read", requireUser(), s.markRead)

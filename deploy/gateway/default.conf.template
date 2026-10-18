@@ -1,0 +1,146 @@
+# Gateway TDTU Food: một tên miền, HTTPS; /svc/<service>/ -> 5 service, / -> giao diện web.
+# Tệp mẫu: ${...} được thay khi container khởi động (envsubst của image nginx, biến chuẩn bị ở 05-tdtu.envsh).
+
+resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+resolver_timeout 3s;
+
+# "resolve": container khởi động lại đổi IP thì gateway tự cập nhật, không phải khởi động lại gateway
+upstream tdtu_auth         { zone tdtu_auth 64k;         server auth:8001 resolve;         keepalive 16; }
+upstream tdtu_restaurant   { zone tdtu_restaurant 64k;   server restaurant:8002 resolve;   keepalive 16; }
+upstream tdtu_order        { zone tdtu_order 64k;        server order:8003 resolve;        keepalive 16; }
+upstream tdtu_notification { zone tdtu_notification 64k; server notification:8004 resolve; keepalive 16; }
+upstream tdtu_review       { zone tdtu_review 64k;       server review:8005 resolve;       keepalive 16; }
+upstream tdtu_web          { zone tdtu_web 64k;          server web:8000 resolve;          keepalive 8; }
+
+# Giới hạn tần suất theo IP, chỉ để chặn lạm dụng / tấn công làm nghẽn. Cả ký túc xá hay mạng Wi-Fi của trường có thể
+# dùng chung 1 IP (NAT), một trang admin mở ra gọi vài chục API cùng lúc, nên ngưỡng để rộng. Chống dò mật khẩu
+# chính xác hơn nằm ở Auth (khóa theo cặp email + IP).
+limit_req_zone $binary_remote_addr zone=tdtu_api:10m rate=100r/s;
+limit_req_zone $binary_remote_addr zone=tdtu_login:10m rate=120r/m;
+limit_req_zone $binary_remote_addr zone=tdtu_upload:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=tdtu_conn:10m;
+limit_req_status 429;
+limit_conn_status 429;
+
+log_format tdtu '$remote_addr [$time_local] "$request" $status $body_bytes_sent $request_time '
+                '"$http_user_agent" rid=$request_id up=$upstream_addr';
+
+server {
+    listen 80 default_server;
+    server_name _;
+    server_tokens off;
+
+    location /.well-known/acme-challenge/ { root /var/www/acme; }        # Let's Encrypt (certbot --webroot)
+    location = /healthz { access_log off; default_type text/plain; return 200 "ok\n"; }
+    location / { return 301 https://$host${HTTPS_PORT_SUFFIX}$request_uri; }
+}
+
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    server_name ${SERVER_NAME};
+    server_tokens off;
+
+    ssl_certificate     ${SSL_CERT};
+    ssl_certificate_key ${SSL_KEY};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:TDTU_TLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Request-ID $request_id always;
+
+    access_log /var/log/nginx/access.log tdtu;
+    client_max_body_size 3m;                # ảnh quán / món tối đa 2 MB
+    client_body_timeout 15s;
+    client_header_timeout 15s;
+    keepalive_timeout 30s;
+    limit_conn tdtu_conn 300;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;          # ghi đè, không nối: người dùng không giả được IP
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Request-ID $request_id;               # mã truy vết, trả lại cho trình duyệt ở header cùng tên
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 60s;
+    proxy_next_upstream off;                # không gửi lại yêu cầu (đặt món) sang lần thử khác
+
+    error_page 429 = @rate_limited;
+
+    # Tham số kiểu ";x=1" trong đường dẫn: không API nào dùng; chặn để không lách được quy tắc chặn /internal bên dưới
+    if ($uri ~ ";") {
+        return 400;
+    }
+
+    # API nội bộ giữa các service và trang tài liệu API không mở ra Internet (so tiền tố, không phân biệt hoa thường)
+    location ~* ^/svc/[^/]+/(internal|docs|redoc|openapi) {
+        default_type application/json;
+        return 404 '{"detail":"Không tìm thấy API","code":"NOT_FOUND"}';
+    }
+
+    location = /svc/auth/api/users/login {
+        limit_req zone=tdtu_login burst=60 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_auth/api/users/login;
+    }
+    location = /svc/auth/api/users/register {
+        limit_req zone=tdtu_login burst=60 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_auth/api/users/register;
+    }
+    location = /svc/restaurant/api/uploads {
+        limit_req zone=tdtu_upload burst=10 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_restaurant/api/uploads;
+    }
+    location /svc/auth/ {
+        limit_req zone=tdtu_api burst=200 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_auth/;
+    }
+    location /svc/restaurant/ {
+        limit_req zone=tdtu_api burst=200 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_restaurant/;
+    }
+    location /svc/order/ {
+        limit_req zone=tdtu_api burst=200 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_order/;
+    }
+    location /svc/notification/ {
+        limit_req zone=tdtu_api burst=200 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_notification/;
+    }
+    location /svc/review/ {
+        limit_req zone=tdtu_api burst=200 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_review/;
+    }
+    location /svc/ {
+        default_type application/json;
+        return 404 '{"detail":"Không tìm thấy API","code":"NOT_FOUND"}';
+    }
+
+    location / {                            # trang tĩnh: không giới hạn tần suất (rẻ, trình duyệt tải song song)
+        proxy_pass http://tdtu_web;
+    }
+
+    location @rate_limited {
+        default_type application/json;
+        add_header Retry-After 10 always;
+        add_header X-Request-ID $request_id always;
+        return 429 '{"detail":"Bạn thao tác quá nhanh, vui lòng thử lại sau vài giây","code":"RATE_LIMITED"}';
+    }
+    location @unavailable {
+        default_type application/json;
+        add_header X-Request-ID $request_id always;
+        return 503 '{"detail":"Dịch vụ đang tạm dừng hoặc khởi động lại, vui lòng thử lại sau","code":"UPSTREAM_UNAVAILABLE"}';
+    }
+}

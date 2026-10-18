@@ -38,15 +38,23 @@ type recipient struct {
 
 // recipients: quy tắc người nhận
 //
-//	order_created -> chủ quán; order_confirmed / order_completed -> sinh viên;
+//	payment_claimed (sinh viên báo đã chuyển khoản = đơn mới) -> chủ quán;
+//	payment_confirmed (quán nhận được tiền) / payment_refunded / order_confirmed / order_completed -> sinh viên;
+//	order_created (bản cũ, trước khi có thanh toán trước) -> chủ quán;
 //	order_cancelled: sinh viên hủy -> chủ quán; chủ quán hủy -> sinh viên; admin hủy -> cả hai.
 func recipients(ev OrderEvent) []recipient {
 	sv, owner, name, code := ev.StudentID, ev.OwnerID, ev.RestaurantName, ev.OrderCode
 	switch ev.Event {
 	case "order_created":
 		return []recipient{{owner, fmt.Sprintf("Quán %s có đơn mới #%s, vui lòng xác nhận.", name, code)}}
+	case "payment_claimed":
+		return []recipient{{owner, fmt.Sprintf("Quán %s có đơn mới #%s: sinh viên báo đã chuyển khoản. Kiểm tra tài khoản ngân hàng rồi bấm Đã nhận tiền.", name, code)}}
+	case "payment_confirmed":
+		return []recipient{{sv, fmt.Sprintf("Quán %s đã nhận tiền, đơn #%s đặt thành công. Chờ quán báo đang chuẩn bị rồi tới quán đọc mã %s.", name, code, code)}}
+	case "payment_refunded":
+		return []recipient{{sv, fmt.Sprintf("Quán %s đã hoàn tiền đơn #%s vào tài khoản của bạn.", name, code)}}
 	case "order_confirmed":
-		return []recipient{{sv, fmt.Sprintf("Đơn #%s đã được quán %s xác nhận và đang chuẩn bị.", code, name)}}
+		return []recipient{{sv, fmt.Sprintf("Đơn #%s đã được quán %s xác nhận và đang chuẩn bị. Tới quán, đọc mã %s để nhận món.", code, name, code)}}
 	case "order_completed":
 		return []recipient{{sv, fmt.Sprintf("Đơn #%s đã hoàn thành. Hãy đánh giá quán %s nhé!", code, name)}}
 	}
@@ -123,7 +131,8 @@ func parseEvent(raw []byte) (OrderEvent, error) {
 			errs = append(errs, FieldError{f, "phải là một trong: " + strings.Join(allowed, ", ")})
 		}
 	}
-	enum("event", "order_created", "order_confirmed", "order_completed", "order_cancelled")
+	enum("event", "order_created", "order_confirmed", "order_completed", "order_cancelled", "payment_claimed",
+		"payment_confirmed", "payment_refunded")
 	enum("actor_role", "sinh_vien", "chu_quan", "admin")
 	if len(errs) > 0 {
 		return OrderEvent{}, validationErr(errs)
@@ -336,6 +345,22 @@ func (s *Server) adminList(c *gin.Context) {
 	}
 	res["unread"] = nil
 	c.JSON(200, res)
+}
+
+// eraseUser xóa mọi thông báo của một tài khoản (Auth điều phối khi admin xử lý yêu cầu xóa dữ liệu cá nhân).
+// Gọi lại nhiều lần cho cùng kết quả.
+func (s *Server) eraseUser(c *gin.Context) {
+	id, err := uuidValue(c.Param("uid"), "user_id")
+	if err != nil {
+		writeErr(c, err)
+		return
+	}
+	res := s.db.Where("user_id = ?", id).Delete(&Notification{})
+	if res.Error != nil {
+		writeErr(c, res.Error)
+		return
+	}
+	c.JSON(200, gin.H{"user_id": id, "notifications_deleted": res.RowsAffected})
 }
 
 func (s *Server) adminDelete(c *gin.Context) {

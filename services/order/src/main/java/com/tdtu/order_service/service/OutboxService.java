@@ -54,7 +54,7 @@ public class OutboxService {
         payload.put("event_key", key);
         payload.put("event", event);
         payload.put("order_id", o.id());
-        payload.put("order_code", o.id().substring(0, 8).toUpperCase());
+        payload.put("order_code", o.displayCode());
         payload.put("student_id", o.userId());
         payload.put("owner_id", o.restaurantOwnerId());
         payload.put("restaurant_name", o.restaurantName());

@@ -1,0 +1,28 @@
+{
+  "name": "TDTU Food – Đặt món quanh trường",
+  "short_name": "TDTU Food",
+  "description": "Đặt món từ các quán quanh Đại học Tôn Đức Thắng, tới quán đọc mã 3 số để nhận món.",
+  "id": "/",
+  "start_url": "/index.html?source=app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5efe5",
+  "theme_color": "#15489d",
+  "lang": "vi",
+  "categories": ["food", "lifestyle"],
+  "icons": [
+    { "src": "/assets/brand/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/brand/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/brand/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/assets/brand/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Quán ăn", "short_name": "Quán ăn", "url": "/student.html#restaurants",
+      "icons": [{ "src": "/assets/brand/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Đơn của tôi", "short_name": "Đơn của tôi", "url": "/student.html#orders",
+      "icons": [{ "src": "/assets/brand/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Đơn hàng của quán", "short_name": "Đơn quán", "url": "/owner.html#orders",
+      "icons": [{ "src": "/assets/brand/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

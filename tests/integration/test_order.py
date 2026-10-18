@@ -1,4 +1,4 @@
-"""Order: giỏ hàng, checkout, chống trùng, giá chụp, trạng thái, đồng thời, outbox thông báo."""
+"""Order: giỏ hàng, checkout, thanh toán trước (VietQR), chống trùng, giá chụp, trạng thái, đồng thời, outbox thông báo."""
 import threading
 import uuid
 
@@ -83,6 +83,7 @@ def test_checkout_snapshot_and_history_survives_menu_changes(world):
     s.restaurant.delete(f"/api/restaurants/{world.rid}", headers=world.owner)
     again = s.order.get(f"/api/orders/{o['id']}", headers=world.sv).json()
     assert again["total_price"] == 79000 and {i["item_name"] for i in again["items"]} == {"Cơm sườn", "Trà đá"}
+    s.pay_order(world.sv, o["id"], world.owner)
     assert s.order.patch(f"/api/orders/{o['id']}/status", headers=world.owner, json={"status": "confirmed"}).status_code == 200
     assert s.order.get(f"/api/orders/{o['id']}", headers=world.owner).json()["status"] == "confirmed"
 
@@ -149,22 +150,41 @@ def test_status_rules_by_role(world):
     assert r.status_code == 409 and r.json()["code"] == "INVALID_TRANSITION"
     assert s.order.patch(url, headers=world.owner, json={"status": "confirmed"}).status_code == 200
     r = s.order.patch(url, headers=world.sv, json={"status": "cancelled"})
-    assert r.status_code == 403                                                    # SV chỉ hủy khi pending
+    assert r.status_code == 403                                                    # SV không tự hủy đơn đã đặt
     assert s.order.patch(url, headers=world.owner, json={"status": "completed"}).status_code == 200
-    for actor in (world.owner, world.admin):
-        assert s.order.patch(url, headers=actor, json={"status": "cancelled"}).status_code == 409   # trạng thái cuối
+    assert s.order.patch(url, headers=world.owner, json={"status": "cancelled"}).status_code == 409   # trạng thái cuối
+    assert s.order.patch(url, headers=world.admin, json={"status": "cancelled"}).status_code == 409   # đơn đã xong: hết hủy
     assert s.order.patch(url, headers=world.owner, json={"status": "shipped"}).status_code == 422
 
 
-def test_cancel_by_student_and_admin(world):
+def test_admin_cancels_but_student_cannot(world):
     s = world.s
     o1 = _order(world)
-    r = s.order.patch(f"/api/orders/{o1['id']}/status", headers=world.sv, json={"status": "cancelled", "reason": "Đổi ý"})
-    assert r.json()["status"] == "cancelled" and r.json()["cancelled_by"] == "sinh_vien" and r.json()["cancel_reason"] == "Đổi ý"
-    o2 = _order(world)
+    url1 = f"/api/orders/{o1['id']}/status"
+    r = s.order.patch(url1, headers=world.sv, json={"status": "cancelled", "reason": "Đổi ý"})   # đặt rồi: không tự hủy
+    assert r.status_code == 403 and r.json()["code"] == "FORBIDDEN", r.text
+    assert s.order.get(f"/api/orders/{o1['id']}", headers=world.sv).json()["status"] == "pending"
+    r = s.order.patch(url1, headers=world.admin, json={"status": "cancelled", "reason": "Sinh viên nhờ hủy"})
+    assert r.status_code == 200 and r.json()["cancelled_by"] == "admin" and r.json()["cancel_reason"] == "Sinh viên nhờ hủy"
+    o2 = _order(world)                                       # đơn quán đã nhận: admin vẫn hủy được
     s.order.patch(f"/api/orders/{o2['id']}/status", headers=world.owner, json={"status": "confirmed"})
+    assert s.order.patch(f"/api/orders/{o2['id']}/status", headers=world.sv, json={"status": "cancelled"}).status_code == 403
     r = s.order.patch(f"/api/orders/{o2['id']}/status", headers=world.admin, json={"status": "cancelled", "reason": "Đơn lỗi"})
-    assert r.json()["cancelled_by"] == "admin"
+    assert r.status_code == 200 and r.json()["cancelled_by"] == "admin"
+    msgs = s.notification.get("/api/notifications/me", headers=world.sv).json()["items"]
+    assert any("bị hủy bởi quản trị viên" in m["message"] for m in msgs)    # sinh viên và chủ quán đều được báo
+
+
+def test_pickup_code_is_three_digits_and_sequential(world):
+    s = world.s
+    codes = [_order(world)["pickup_code"] for _ in range(3)]
+    assert all(len(c) == 3 and c.isdigit() for c in codes), codes
+    assert [int(c) for c in codes[1:]] == [int(c) % 999 + 1 for c in codes[:-1]]
+    # sinh viên, chủ quán, admin đều thấy cùng mã; thông báo cho chủ quán ghi mã 3 số
+    mine = {o["pickup_code"] for o in s.order.get("/api/orders/me", headers=world.sv, params={"page_size": 50}).json()["items"]}
+    assert set(codes) <= mine                                   # 3 đơn cùng một giây: thứ tự trong danh sách không cố định
+    msgs = s.notification.get("/api/notifications/me", headers=world.owner).json()["items"]
+    assert any(f"#{codes[-1]}" in m["message"] for m in msgs), [m["message"] for m in msgs]
 
 
 def test_concurrent_status_updates(world):
@@ -216,23 +236,23 @@ def test_notifications_flow_and_outbox_retry_without_duplicates(world):
               if f["order_id"] == o["id"]]
     assert {f["event_key"].split(":")[1] for f in failed} == {"order_confirmed", "order_completed"}
     assert all(f["last_error"] for f in failed)
-    assert len(notis(world, world.sv)) == 0
+    assert len(notis(world, world.sv)) == 1                                   # chỉ có "quán đã nhận tiền"
     s.fault("notification", None)
     r = s.order.post("/api/admin/outbox/retry", headers=world.admin).json()
     assert r["sent"] >= 2 and r["failed"] == 0, r
     assert s.order.post("/api/admin/outbox/retry", headers=world.admin).json() == {"sent": 0, "failed": 0}
     msgs = [n["message"] for n in notis(world, world.sv)]
-    assert len(msgs) == 2 and sum("hoàn thành" in m for m in msgs) == 1
+    assert len(msgs) == 3 and sum("hoàn thành" in m for m in msgs) == 1
     sent = s.order.get("/api/admin/outbox", headers=world.admin, params={"status": "sent"}).json()
     assert {f["event_key"].split(":")[1] for f in sent if f["order_id"] == o["id"]} == {
-        "order_created", "order_confirmed", "order_completed"}
+        "payment_claimed", "payment_confirmed", "order_confirmed", "order_completed"}
     # Order gửi lại cùng sự kiện (mô phỏng retry sau khi đã gửi thành công) -> Notification không nhân đôi
     payload = {"event_key": f"{o['id']}:order_completed", "event": "order_completed", "order_id": o["id"],
                "order_code": o["id"][:8].upper(), "student_id": s.me(world.sv), "owner_id": s.me(world.owner),
                "restaurant_name": o["restaurant_name"], "actor_role": "chu_quan"}
     r = s.notification.post("/internal/notifications/events", json=payload, headers=INTERNAL)
     assert (r.status_code, r.json()) == (200, {"created": 0, "duplicates": 1})
-    assert len(notis(world, world.sv)) == 2 and len(notis(world, world.owner)) == 1
+    assert len(notis(world, world.sv)) == 3 and len(notis(world, world.owner)) == 1
 
 
 def test_internal_order_endpoint_requires_key(world):
@@ -241,3 +261,83 @@ def test_internal_order_endpoint_requires_key(world):
     assert s.order.get(f"/internal/orders/{o['id']}").status_code == 403
     assert s.order.get(f"/internal/orders/{o['id']}", headers=INTERNAL).json()["restaurant_owner_id"]
     assert s.order.get(f"/internal/orders/{uuid.uuid4()}", headers=INTERNAL).status_code == 404
+
+
+# ------------------------------------------------------------------ thanh toán trước bằng VietQR
+def test_prepay_snapshot_claim_confirm_and_owner_tabs(world):
+    s = world.s
+    add(s, world.sv, world.rid, world.item1, 2)
+    o = checkout(s, world.sv).json()
+    p = o["payment"]
+    assert (o["status"], p["status"], p["amount"]) == ("pending", "unpaid", 70000)
+    assert (p["bank_bin"], p["bank_name"], p["account"], p["holder"]) == ("970436", "Vietcombank", "0071000123456",
+                                                                          "CHU QUAN TEST")
+    assert p["note"] == f"TDTU {o['pickup_code']} {o['id'][:4].upper()}" and p["deadline"] > o["created_at"]
+    assert notis(world, world.owner) == []                                   # chưa trả tiền: quán chưa được báo
+
+    def tab(pay):
+        r = s.order.get("/api/orders/owner", headers=world.owner, params={"status": "pending", "payment_status": pay})
+        return [x["id"] for x in r.json()["items"]]
+    assert o["id"] in tab("unpaid,claimed") and o["id"] not in tab("paid")
+    url = f"/api/orders/{o['id']}"
+    r = s.order.patch(url + "/status", headers=world.owner, json={"status": "confirmed"})
+    assert r.status_code == 409 and r.json()["code"] == "NOT_PAID"
+    assert s.order.post(url + "/payment/claim", headers=world.sv2).status_code == 403
+    assert s.order.post(url + "/payment/claim", headers=world.sv).json()["payment"]["status"] == "claimed"
+    assert any("đơn mới" in n["message"] and "chuyển khoản" in n["message"] for n in notis(world, world.owner))
+    r = s.order.patch(url + "/status", headers=world.owner, json={"status": "cancelled"})
+    assert r.status_code == 409 and r.json()["code"] == "PAYMENT_CHECKING"
+    assert s.order.post(url + "/payment/confirm", headers=world.owner2).status_code == 403
+    paid = s.order.post(url + "/payment/confirm", headers=world.owner).json()
+    assert paid["payment"]["status"] == "paid" and paid["payment"]["paid_at"]
+    assert o["id"] in tab("paid")
+    assert any("đặt thành công" in n["message"] for n in notis(world, world.sv))
+    assert s.order.patch(url + "/status", headers=world.owner, json={"status": "confirmed"}).status_code == 200
+
+
+def test_student_drops_unpaid_order_and_owner_rejects_missing_money(world):
+    s = world.s
+    o = s.place_order(world.sv, world.rid, [(world.item1, 1)], pay=False)
+    r = s.order.patch(f"/api/orders/{o['id']}/status", headers=world.sv, json={"status": "cancelled", "reason": "Đổi ý"})
+    assert r.status_code == 200 and r.json()["payment"]["status"] == "void" and r.json()["cancelled_by"] == "sinh_vien"
+    o = s.place_order(world.sv, world.rid, [(world.item1, 1)], pay=False)
+    s.order.post(f"/api/orders/{o['id']}/payment/claim", headers=world.sv)
+    r = s.order.post(f"/api/orders/{o['id']}/payment/reject", headers=world.owner,
+                     json={"reason": "Chưa thấy tiền vào tài khoản"})
+    assert r.status_code == 200, r.text
+    assert (r.json()["status"], r.json()["payment"]["status"], r.json()["cancelled_by"]) == ("cancelled", "failed", "chu_quan")
+    assert any("bị hủy bởi quán" in n["message"] for n in notis(world, world.sv))
+    assert "awaiting_payment" in s.order.get("/api/admin/orders/stats", headers=world.admin).json()
+
+
+def test_paid_order_cancelled_needs_refund(world):
+    s = world.s
+    o = s.place_order(world.sv, world.rid, [(world.item1, 1)])
+    r = s.order.patch(f"/api/orders/{o['id']}/status", headers=world.admin, json={"status": "cancelled", "reason": "Đơn lỗi"})
+    assert r.json()["payment"]["status"] == "refund_due"
+    owner_view = s.order.get("/api/orders/owner", headers=world.owner, params={"payment_status": "refund_due"}).json()
+    assert [x["id"] for x in owner_view["items"]] == [o["id"]]
+    assert s.order.post(f"/api/orders/{o['id']}/payment/refunded", headers=world.sv).status_code == 403
+    r = s.order.post(f"/api/orders/{o['id']}/payment/refunded", headers=world.owner)
+    assert r.status_code == 200 and r.json()["payment"]["status"] == "refunded"
+    assert any("hoàn tiền" in n["message"] for n in notis(world, world.sv))
+
+
+def test_owner_without_payout_account_cannot_take_orders(world):
+    """Chủ quán cũ (đổi vai trò từ sinh viên) chưa khai báo tài khoản nhận tiền: sinh viên chưa đặt được, giỏ giữ nguyên."""
+    s = world.s
+    email = s.email("chuyenvai@test.tdtu.vn")
+    s.register(email)
+    uid = s.auth.get("/api/users/me", headers=s.login(email)).json()["id"]
+    assert s.auth.patch(f"/api/users/{uid}/role", headers=world.admin, json={"role": "chu_quan"}).status_code == 200
+    owner = s.login(email)
+    rid, (iid, _) = s.make_restaurant(owner, world.admin, name="Quán Chưa Có Tài Khoản")
+    add(s, world.sv, rid, iid)
+    r = checkout(s, world.sv)
+    assert r.status_code == 409 and r.json()["code"] == "OWNER_NO_PAYOUT", r.text
+    assert s.order.get("/api/cart", headers=world.sv).json()["item_count"] == 1
+    r = s.auth.put("/api/users/me/payout", headers=owner, json={"bank_bin": "970422", "bank_account": "0123456789",
+                                                                  "bank_holder": "Lê Văn Đổi", "password": "matkhau123"})
+    assert r.status_code == 200 and r.json()["bank_name"] == "MB Bank", r.text
+    o = checkout(s, world.sv).json()
+    assert (o["payment"]["bank_bin"], o["payment"]["holder"]) == ("970422", "LE VAN DOI")

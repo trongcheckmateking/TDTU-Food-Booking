@@ -23,9 +23,11 @@ DEFAULT_CODES = {
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str, message: str, extra: dict | None = None):
+    def __init__(self, status: int, code: str, message: str, extra: dict | None = None,
+                 headers: dict[str, str] | None = None):
         super().__init__(message)
         self.status, self.code, self.message, self.extra = status, code, message, extra or {}
+        self.headers = headers
 
 
 def _body(code: str, message: str, **extra) -> dict:
@@ -35,7 +37,7 @@ def _body(code: str, message: str, **extra) -> dict:
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError):
-        return JSONResponse(_body(exc.code, exc.message, **exc.extra), status_code=exc.status)
+        return JSONResponse(_body(exc.code, exc.message, **exc.extra), status_code=exc.status, headers=exc.headers)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_: Request, exc: StarletteHTTPException):

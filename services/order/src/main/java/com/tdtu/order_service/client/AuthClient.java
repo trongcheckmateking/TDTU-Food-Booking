@@ -22,6 +22,25 @@ public class AuthClient {
 
     public record AuthUser(String id, String role, String name, String phone) {}
 
+    /** Tài khoản ngân hàng nhận tiền của chủ quán (Auth lưu khi chủ quán đăng ký). */
+    public record Payout(String bankBin, String bankName, String account, String holder) {}
+
+    /** GET Auth /internal/users/{id}/payout (khóa nội bộ). Chủ quán chưa khai báo -> 409 OWNER_NO_PAYOUT. */
+    public Payout payout(String ownerId) {
+        Upstream.Result r = Upstream.call("GET", Env.serviceUrl("AUTH") + "/internal/users/" + ownerId + "/payout",
+                "Auth Service", null, true, null, Set.of(404), null);
+        if (r.status() == 404) {
+            throw new ApiError(409, "OWNER_NO_PAYOUT",
+                    "Quán chưa nhận chuyển khoản (chưa khai báo tài khoản nhận tiền). Hãy chọn trả tiền mặt khi nhận món");
+        }
+        JsonNode d = r.body();
+        String bin = d.path("bank_bin").asText(""), acc = d.path("bank_account").asText("");
+        if (!bin.matches("[0-9]{6}") || !acc.matches("[0-9]{6,19}")) {
+            throw new ApiError(502, "UPSTREAM_BAD_RESPONSE", "Auth Service trả tài khoản nhận tiền không đúng định dạng");
+        }
+        return new Payout(bin, d.path("bank_name").asText(""), acc, d.path("bank_holder").asText(""));
+    }
+
     public AuthUser verify(String token) {
         Upstream.Result r = Upstream.call("GET", Env.serviceUrl("AUTH") + "/api/users/me", "Auth Service", token,
                 false, null, Set.of(401, 403), null);

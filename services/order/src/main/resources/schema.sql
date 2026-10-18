@@ -67,3 +67,31 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     sent_at         VARCHAR(20)
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON notification_outbox(status, next_attempt_at);
+
+-- Mã nhận món 3 chữ số (sinh viên đọc khi tới quán, như Grab / be): số thứ tự đơn trong ngày (giờ Việt Nam) của từng
+-- quán, 001 -> 999 rồi quay vòng. Đơn cũ được cấp mã khi Order Service khởi động.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_code VARCHAR(3);
+CREATE TABLE IF NOT EXISTS pickup_counters (
+    restaurant_id VARCHAR(36) NOT NULL,
+    order_day     VARCHAR(10) NOT NULL,          -- YYYY-MM-DD theo giờ Việt Nam
+    last_no       INT NOT NULL,
+    PRIMARY KEY (restaurant_id, order_day)
+);
+
+-- Thanh toán trước bằng VietQR, tiền chuyển thẳng vào tài khoản của chủ quán (xem model/Payment.java).
+-- Đơn có trước khi có thanh toán được coi là đã thanh toán (DEFAULT 'paid'); đơn mới ghi rõ 'unpaid'.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(16) DEFAULT 'paid' NOT NULL;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_bank_bin VARCHAR(6);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_bank_name VARCHAR(80);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_account VARCHAR(19);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_holder VARCHAR(60);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_note VARCHAR(30);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_deadline VARCHAR(20);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_claimed_at VARCHAR(20);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at VARCHAR(20);
+CREATE INDEX IF NOT EXISTS idx_orders_payment ON orders(payment_status, pay_deadline);
+
+-- 2 cách trả tiền (thêm 16/10/2026): transfer = chuyển khoản trước (VietQR), cash = tiền mặt khi nhận món.
+-- Đơn có từ trước khi có thanh toán trước là trả tại quán -> mặc định 'cash'; đơn chuyển khoản luôn có pay_bank_bin.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(10) DEFAULT 'cash' NOT NULL;
+UPDATE orders SET payment_method='transfer' WHERE payment_method='cash' AND pay_bank_bin IS NOT NULL;

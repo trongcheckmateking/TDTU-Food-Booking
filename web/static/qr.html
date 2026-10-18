@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Áp phích mã QR – TDTU Food</title>
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="TDTU Food">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#15489d">
+<link rel="stylesheet" href="assets/style.css">
+<script src="config.js"></script>
+<script src="assets/app.js"></script>
+<style>
+  /* Hai áp phích A5 ngang trên một tờ A4 dọc: in ra, cắt đôi, dán ở quầy quán và bảng tin khoa */
+  body{background:#e7ebf2}
+  .toolbar{display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;padding:16px;text-align:center}
+  .sheet{width:210mm;margin:0 auto 24px;background:#fff;box-shadow:0 10px 30px rgba(10,36,87,.2)}
+  .poster{position:relative;height:148.5mm;overflow:hidden;display:grid;grid-template-columns:1fr 84mm;gap:8mm;align-items:center;padding:12mm 14mm}
+  .poster + .poster{border-top:1px dashed #b9c3d6}
+  .poster::before{content:"";position:absolute;right:-26mm;top:-10mm;bottom:-10mm;width:118mm;background:var(--blue);transform:skewX(var(--slant))}
+  .poster::after{content:"";position:absolute;right:88mm;top:-10mm;bottom:-10mm;width:7mm;background:var(--red);transform:skewX(var(--slant))}
+  .poster > *{position:relative;z-index:1}
+  .poster .brand img{width:13mm;height:13mm}
+  .poster .wordmark{font-size:7mm}
+  .poster h1{font-size:13mm;line-height:1.02;margin:7mm 0 4mm;letter-spacing:-.02em}
+  .poster p{font-size:4.2mm;line-height:1.45;color:#33415f;margin:0;max-width:92mm}
+  .poster .steps{margin-top:5mm;font-size:3.8mm;gap:2.2mm}
+  .poster .steps li::before{width:6mm;height:6mm}
+  .qr-box{background:#fff;border-radius:4mm;padding:4mm;text-align:center;box-shadow:0 2mm 8mm rgba(6,22,58,.35)}
+  .qr-box img{width:72mm;height:72mm;display:block}
+  .qr-box strong{display:block;font-size:4.6mm;color:var(--blue-900);margin-top:2mm;font-style:italic;font-weight:800}
+  .qr-box span{display:block;font-size:2.7mm;color:var(--muted);word-break:break-all;margin-top:1mm}
+  .foot{position:absolute;left:14mm;bottom:7mm;z-index:1;font-size:2.8mm;color:var(--muted)}
+  @page{size:A4 portrait;margin:0}
+  @media print{
+    body{background:#fff}
+    .toolbar{display:none}
+    .sheet{margin:0;box-shadow:none}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+  @media screen and (max-width:860px){ .sheet{zoom:.46} }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button class="primary" type="button" id="printBtn">In áp phích</button>
+  <span class="small muted" id="hint"></span>
+</div>
+<div class="sheet">
+  <section class="poster">
+    <div>
+      <span class="brand"><img src="assets/brand/logo.png" alt=""><span class="wordmark">TDTU <i>Food</i></span></span>
+      <h1 class="display">Đói giữa giờ?<br>Quét là đặt.</h1>
+      <p>Đặt món từ các quán quanh trường, ghi chỗ nhận ở cổng trường, ký túc xá hay phòng học.</p>
+      <ol class="steps">
+        <li>Quét mã bằng camera điện thoại</li>
+        <li>Tạo tài khoản sinh viên</li>
+        <li>Chọn quán, đặt món, chờ thông báo</li>
+      </ol>
+    </div>
+    <div class="qr-box"><img src="qr/sinh-vien.svg" alt="Mã QR cho sinh viên"><strong>Dành cho sinh viên</strong><span data-link="sinh-vien"></span></div>
+    <div class="foot">Đồ án môn học của sinh viên Trường Đại học Tôn Đức Thắng</div>
+  </section>
+  <section class="poster">
+    <div>
+      <span class="brand"><img src="assets/brand/logo.png" alt=""><span class="wordmark">TDTU <i>Food</i></span></span>
+      <h1 class="display">Quán bạn,<br>khách TDTU.</h1>
+      <p>Nhận đơn đặt trước từ sinh viên TDTU, xác nhận bằng một nút bấm, món mới tự lên bảng tin của app.</p>
+      <ol class="steps">
+        <li>Quét mã, tạo tài khoản chủ quán</li>
+        <li>Gửi tên quán, địa chỉ, giờ mở cửa</li>
+        <li>Được duyệt là thêm món và nhận đơn</li>
+      </ol>
+    </div>
+    <div class="qr-box"><img src="qr/chu-quan.svg" alt="Mã QR cho chủ quán"><strong>Dành cho chủ quán</strong><span data-link="chu-quan"></span></div>
+    <div class="foot">Đồ án môn học của sinh viên Trường Đại học Tôn Đức Thắng</div>
+  </section>
+</div>
+<script src="assets/qr-page.js"></script>
+</body>
+</html>

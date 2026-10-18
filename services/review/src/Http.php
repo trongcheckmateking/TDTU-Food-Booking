@@ -172,6 +172,15 @@ function applyCors(array $choPhep): void
     }
 }
 
+// 7. API nội bộ: chỉ service tin cậy gửi đúng X-Internal-Key (so sánh hằng thời gian)
+function requireInternal(): void
+{
+    $given = $_SERVER['HTTP_X_INTERNAL_KEY'] ?? '';
+    if (!is_string($given) || $given === '' || !hash_equals(requireEnv('INTERNAL_KEY', 24), $given)) {
+        throw new ApiError(403, 'INTERNAL_ONLY', 'API nội bộ, chỉ service tin cậy được gọi');
+    }
+}
+
 function nowIso(): string
 {
     return gmdate('Y-m-d\TH:i:s\Z');

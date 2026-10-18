@@ -46,8 +46,10 @@ def main():
     users = {}
     for role, key in (("chu_quan", "owner"), ("sinh_vien", "sv")):
         email = f"smoke-{key}-{tag}@student.tdtu.edu.vn"
-        r = requests.post(U["auth"] + "/api/users/register", timeout=10,
-                          json={"name": "Smoke Test", "email": email, "password": "smoke12345", "role": role})
+        body = {"name": "Smoke Test", "email": email, "password": "smoke12345", "role": role, "accept_terms": True}
+        if role == "chu_quan":                       # tài khoản nhận tiền giả, chỉ để thử (không chuyển tiền thật)
+            body.update(bank_bin="970436", bank_account="0071000123456", bank_holder="SMOKE TEST DEMO")
+        r = requests.post(U["auth"] + "/api/users/register", timeout=10, json=body)
         step(f"đăng ký {role}", r.status_code == 201, r.text)
         users[key] = login(email, "smoke12345")
     r = requests.post(U["restaurant"] + "/api/restaurants", headers=users["owner"], timeout=10,
@@ -66,11 +68,17 @@ def main():
                       json={"delivery_address": "KTX TDTU"})
     step("checkout", r.status_code == 201 and r.json()["total_price"] == 60000, r.text)
     oid = r.json().get("id")
+    pay = r.json().get("payment") or {}
+    step("đơn chờ thanh toán vào tài khoản quán", pay.get("status") == "unpaid" and pay.get("account") == "0071000123456", str(pay))
+    r = requests.post(U["order"] + f"/api/orders/{oid}/payment/claim", headers=users["sv"], timeout=10)
+    step("sinh viên báo đã chuyển khoản", r.status_code == 200, r.text)
+    r = requests.post(U["order"] + f"/api/orders/{oid}/payment/confirm", headers=users["owner"], timeout=10)
+    step("chủ quán xác nhận đã nhận tiền", r.status_code == 200 and r.json()["payment"]["status"] == "paid", r.text)
     for st in ("confirmed", "completed"):
         r = requests.patch(U["order"] + f"/api/orders/{oid}/status", headers=users["owner"], json={"status": st}, timeout=10)
         step(f"chủ quán chuyển {st}", r.status_code == 200, r.text)
     n = requests.get(U["notification"] + "/api/notifications/me", headers=users["sv"], timeout=10).json()
-    step("sinh viên nhận 2 thông báo", n["total"] == 2, str(n))
+    step("sinh viên nhận 3 thông báo", n["total"] == 3, str(n))
     r = requests.post(U["review"] + "/api/reviews", headers=users["sv"], json={"order_id": oid, "rating": 5}, timeout=10)
     step("đánh giá đơn hoàn thành", r.status_code == 201, r.text)
     s = requests.get(U["review"] + f"/api/reviews/restaurant/{rid}/summary", timeout=10).json()

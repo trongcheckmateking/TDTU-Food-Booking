@@ -64,7 +64,7 @@ function req(string $method, string $url, ?string $token = null, mixed $json = n
     $resp = (string) curl_exec($c);
     $status = curl_getinfo($c, CURLINFO_RESPONSE_CODE);
     $hsize = curl_getinfo($c, CURLINFO_HEADER_SIZE);
-    curl_close($c);
+    unset($c);                      // curl_close() không còn tác dụng từ PHP 8.0 (và bị đánh dấu lỗi thời từ 8.5)
     return [$status, json_decode(substr($resp, $hsize), true), strtolower(substr($resp, 0, $hsize))];
 }
 
@@ -167,6 +167,23 @@ try {
     check('rid sai 422', $s === 422);
     [$s] = req('GET', "$B/api/reviews/restaurant/$R1?page=0");
     check('page sai 422', $s === 422);
+
+    // nội bộ: xóa dữ liệu cá nhân -> tên người viết bị ẩn danh, điểm của quán giữ nguyên
+    $erase = "$B/internal/users/{$U(21)}/erase";
+    [$s, $b] = req('POST', $erase);
+    check('xóa dữ liệu thiếu khóa 403', $s === 403 && $b['code'] === 'INTERNAL_ONLY', $b);
+    [$s] = req('POST', $erase, null, null, null, ['X-Internal-Key: sai']);
+    check('xóa dữ liệu sai khóa 403', $s === 403);
+    [$s] = req('POST', "$B/internal/users/abc/erase", null, null, null, ["X-Internal-Key: $key"]);
+    check('xóa dữ liệu id sai 422', $s === 422);
+    [$s, $b] = req('POST', $erase, null, null, null, ["X-Internal-Key: $key"]);
+    check('xóa dữ liệu', $s === 200 && $b['reviews_anonymized'] === 2, $b);
+    [$s, $b] = req('GET', "$B/api/reviews/restaurant/$R1?page_size=10");
+    $names = array_count_values(array_column($b['items'] ?? [], 'reviewer_name'));
+    check('tên người viết đã ẩn danh', ($names['Người dùng đã xóa'] ?? 0) === 2 && !isset($names['Nguyễn Văn An'])
+        && ($names['Phạm Thị Bình'] ?? 0) === 1 && $b['summary']['count'] === 3, $b);
+    [$s, $b] = req('POST', $erase, null, null, null, ["X-Internal-Key: $key"]);
+    check('xóa dữ liệu gọi lại an toàn', $s === 200 && $b['reviews_anonymized'] === 2, $b);
 
     // lỗi upstream
     foreach ([['500', 502, 'UPSTREAM_ERROR'], ['badjson', 502, 'UPSTREAM_BAD_RESPONSE'], ['slow', 503, 'UPSTREAM_UNAVAILABLE']] as [$mode, $st, $code]) {

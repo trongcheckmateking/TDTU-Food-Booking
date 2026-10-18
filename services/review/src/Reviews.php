@@ -15,6 +15,8 @@ final class Reviews
     private const ADMIN_FIELDS = ['id', 'reviewer_name', 'rating', 'comment', 'created_at', 'order_id', 'restaurant_id',
         'restaurant_name', 'status', 'user_id', 'hidden_reason'];
 
+    public const ERASED_NAME = 'Người dùng đã xóa';
+
     public function __construct(private PDO $db) {}
 
     private static function pick(array $row, array $fields): array
@@ -152,5 +154,16 @@ final class Reviews
             throw new ApiError(404, 'REVIEW_NOT_FOUND', 'Không tìm thấy đánh giá');
         }
         return self::pick($this->find($id), self::ADMIN_FIELDS);
+    }
+
+    /**
+     * Xóa dữ liệu cá nhân (Auth điều phối khi admin xử lý yêu cầu xóa): tên người viết thành "Người dùng đã xóa".
+     * Số sao và nhận xét được giữ để điểm trung bình của quán không đổi. Gọi lại nhiều lần cho cùng kết quả.
+     */
+    public function eraseUser(string $userId): array
+    {
+        $stmt = $this->db->prepare('UPDATE reviews SET reviewer_name=?, updated_at=? WHERE user_id=?');
+        $stmt->execute([self::ERASED_NAME, nowIso(), $userId]);
+        return ['user_id' => $userId, 'reviews_anonymized' => $stmt->rowCount()];
     }
 }

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
 )
 
 const testKey = "test-internal-key-yyyyyyyyyyyyyyyy"
@@ -35,12 +34,31 @@ func TestRecipients(t *testing.T) {
 	cases := map[string][]string{
 		"order_created/sinh_vien": {"3"}, "order_confirmed/chu_quan": {"2"}, "order_completed/chu_quan": {"2"},
 		"order_cancelled/sinh_vien": {"3"}, "order_cancelled/chu_quan": {"2"}, "order_cancelled/admin": {"2", "3"},
+		"payment_claimed/sinh_vien": {"3"}, "payment_confirmed/chu_quan": {"2"}, "payment_refunded/chu_quan": {"2"},
 	}
 	for k, want := range cases {
 		p := strings.Split(k, "/")
 		if got := who(p[0], p[1]); strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s: got %v want %v", k, got, want)
 		}
+	}
+}
+
+func TestPaymentMessages(t *testing.T) {
+	ev := OrderEvent{OrderCode: "047", StudentID: u(2), OwnerID: u(3), RestaurantName: "Cơm Tấm"}
+	msg := func(event string) string {
+		e := ev
+		e.Event, e.ActorRole = event, "chu_quan"
+		return recipients(e)[0].Message
+	}
+	if m := msg("payment_claimed"); !strings.Contains(m, "đơn mới #047") || !strings.Contains(m, "chuyển khoản") {
+		t.Errorf("payment_claimed: %s", m)
+	}
+	if m := msg("payment_confirmed"); !strings.Contains(m, "đặt thành công") || !strings.Contains(m, "đọc mã 047") {
+		t.Errorf("payment_confirmed: %s", m)
+	}
+	if m := msg("payment_refunded"); !strings.Contains(m, "hoàn tiền đơn #047") {
+		t.Errorf("payment_refunded: %s", m)
 	}
 }
 
@@ -227,5 +245,33 @@ func TestIntegrationEventsAndReading(t *testing.T) {
 	}
 	if st, h := call("GET", "/health", "", nil); st != 200 || h["db"] != "ok" {
 		t.Fatalf("health: %v", h)
+	}
+}
+
+func TestIntegrationEraseUser(t *testing.T) {
+	_, call := setupIntegration(t)
+	call("POST", "/internal/notifications/events", "internal", validEvent()) // -> chủ quán
+	cancel := validEvent()
+	cancel["event"], cancel["actor_role"], cancel["event_key"] = "order_cancelled", "admin", u(1)+":order_cancelled"
+	call("POST", "/internal/notifications/events", "internal", cancel) // -> sinh viên + chủ quán
+
+	if st, _ := call("POST", "/internal/users/"+u(3)+"/erase", "", nil); st != 403 {
+		t.Fatalf("thiếu khóa nội bộ phải 403, nhận %d", st)
+	}
+	if st, _ := call("POST", "/internal/users/khong-phai-uuid/erase", "internal", nil); st != 422 {
+		t.Fatalf("id sai phải 422, nhận %d", st)
+	}
+	st, body := call("POST", "/internal/users/"+u(3)+"/erase", "internal", nil)
+	if st != 200 || body["notifications_deleted"].(float64) != 2 || body["user_id"] != u(3) {
+		t.Fatalf("xóa thông báo của chủ quán: %d %v", st, body)
+	}
+	if _, page := call("GET", "/api/notifications/me", "owner", nil); page["total"].(float64) != 0 {
+		t.Fatalf("chủ quán không còn thông báo: %v", page)
+	}
+	if _, page := call("GET", "/api/notifications/me", "sv", nil); page["total"].(float64) != 1 {
+		t.Fatalf("thông báo của người khác giữ nguyên: %v", page)
+	}
+	if st, body := call("POST", "/internal/users/"+u(3)+"/erase", "internal", nil); st != 200 || body["notifications_deleted"].(float64) != 0 {
+		t.Fatalf("gọi lại phải an toàn: %d %v", st, body)
 	}
 }

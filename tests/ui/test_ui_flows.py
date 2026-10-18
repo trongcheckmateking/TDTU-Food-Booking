@@ -1,7 +1,8 @@
 """E2E giao diện bằng Playwright trên hệ thống đang chạy (python manage.py start) với dữ liệu seed.
 
 Chạy:  python -m pytest tests/ui -v      (cần: pip install -r requirements-dev.txt && python -m playwright install chromium)
-Biến môi trường: UI_BASE_URL (mặc định http://127.0.0.1:8000), UI_SCREENSHOTS (thư mục lưu ảnh, tùy chọn).
+Biến môi trường: UI_BASE_URL (mặc định http://127.0.0.1:8000), UI_SCREENSHOTS (thư mục lưu ảnh, tùy chọn),
+UI_IGNORE_HTTPS_ERRORS=1 khi chạy qua gateway Docker có chứng chỉ tự ký (UI_BASE_URL=https://localhost:8443).
 Test tạo dữ liệu mới (đơn, quán) nên chạy trên dữ liệu demo; reset bằng `python manage.py reset-demo --yes`.
 """
 from __future__ import annotations
@@ -13,17 +14,24 @@ from pathlib import Path
 
 import pytest
 
+# Ảnh PNG 4x3 hợp lệ (màu xanh TDTU) để thử tải ảnh bìa quán / ảnh món
+PNG_SMALL = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000040000000308020000003b963991000000104944415478"
+                          "9c6310f5980b470c383900de4b0bb9545d06570000000049454e44ae426082")
+
 playwright = pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 BASE = os.environ.get("UI_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 SHOTS = os.environ.get("UI_SCREENSHOTS")
+INSECURE = os.environ.get("UI_IGNORE_HTTPS_ERRORS") == "1"
 
 
 def _reachable() -> bool:
+    import ssl
     import urllib.request
     try:
-        with urllib.request.urlopen(BASE + "/health", timeout=2) as r:
+        ctx = ssl._create_unverified_context() if INSECURE else None
+        with urllib.request.urlopen(BASE + "/health", timeout=2, context=ctx) as r:
             return r.status == 200
     except Exception:
         return False
@@ -44,11 +52,14 @@ def browser():
 class Page:
     """Trang có ghi lại lỗi console và request lỗi 5xx/mất kết nối."""
     def __init__(self, browser, viewport=(1366, 900)):
-        self.ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, locale="vi-VN")
+        self.ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, locale="vi-VN",
+                                       ignore_https_errors=INSECURE)
         self.page = self.ctx.new_page()
         self.page.set_default_timeout(10000)
         self.errors: list[str] = []
-        self.page.on("console", lambda m: m.type == "error" and self.errors.append("console: " + m.text))
+        # chứng chỉ tự ký (gateway Docker chạy thử): Chrome không cho đăng ký service worker và tự ghi lỗi này
+        self.page.on("console", lambda m: m.type == "error" and not (INSECURE and "SSL certificate error" in m.text)
+                     and self.errors.append("console: " + m.text))
         self.page.on("pageerror", lambda e: self.errors.append("pageerror: " + str(e)))
         self.page.on("requestfailed", lambda r: self.errors.append(f"requestfailed: {r.url}"))
         self.page.on("response", lambda r: r.status >= 500 and self.errors.append(f"HTTP {r.status}: {r.url}"))
@@ -68,8 +79,10 @@ class Page:
         self.ctx.close()
 
 
-def test_full_flow_three_roles(browser):
+def test_full_flow_three_roles(browser, tmp_path):
     run = uuid.uuid4().hex[:6]           # mã riêng cho lần chạy: test chạy lại nhiều lần được
+    png = tmp_path / "anh.png"
+    png.write_bytes(PNG_SMALL)
     # ---- Sinh viên đặt món qua giỏ hàng
     sv = Page(browser)
     sv.login("sv1@demo.tdtu.vn", "Demo@123")
@@ -89,42 +102,137 @@ def test_full_flow_three_roles(browser):
     expect(sv.page.get_by_text("Món thử nghiệm (ẩn)")).to_have_count(0)
     sv.page.get_by_role("button", name="Đặt hàng").first.click()
     sv.page.wait_for_url(re.compile(r"#cart"))
-    sv.page.get_by_placeholder("VD: KTX TDTU, phòng B305").fill("KTX TDTU, phòng B305 (UI test)")
+    # mặc định: tự tới quán lấy (ô địa chỉ ẩn); chọn "Nhờ quán mang tới" thì mới phải nhập chỗ nhận
+    expect(sv.page.get_by_role("radio", name=re.compile("Tự tới quán lấy"))).to_have_attribute("aria-checked", "true")
+    expect(sv.page.get_by_placeholder("VD: KTX TDTU, phòng B305")).to_be_hidden()
+    sv.page.get_by_role("radio", name=re.compile("Nhờ quán mang tới")).click()
+    expect(sv.page.get_by_placeholder("VD: KTX TDTU, phòng B305")).to_be_visible()
+    sv.page.get_by_role("radio", name=re.compile("Tự tới quán lấy")).click()
     sv.shot("02_sinhvien_gio")
     sv.page.get_by_role("button", name=re.compile("Đặt hàng · 73.000")).click()
-    expect(sv.page.locator(".toast", has_text="Đặt hàng thành công")).to_be_visible()
-    sv.page.wait_for_url(re.compile(r"#orders"))
-    first_row = sv.page.locator("tbody tr").first
-    expect(first_row).to_contain_text("Chờ xác nhận")
-    expect(first_row).to_contain_text("73.000")
-    order_code = first_row.locator(".mono").inner_text().strip("#")
-    sv.shot("03_sinhvien_don")
+    # thanh toán trước: mã VietQR chuyển thẳng vào tài khoản của quán, có nút chép số tài khoản / nội dung
+    sv.page.wait_for_url(re.compile(r"#pay/"))
+    pay = sv.page.locator(".pay-card")
+    expect(pay.locator("h1")).to_have_text("Thanh toán để đặt món")
+    expect(pay.locator(".pay-amount")).to_contain_text("73.000")
+    expect(pay).to_contain_text("TAI KHOAN DEMO")                                 # tài khoản demo: có cảnh báo
+    expect(pay.locator(".notice.warn")).to_contain_text("đừng chuyển tiền thật")
+    sv.page.wait_for_function("(document.querySelector('.pay-qr img') || {}).naturalWidth > 0")
+    order_code = re.search(r"#(\d{3})", pay.locator(".pay-head").inner_text()).group(1)   # mã đơn luôn 3 chữ số
+    expect(pay.locator(".pay-row", has_text="Nội dung")).to_contain_text(f"TDTU {order_code}")
+    sv.shot("03_sinhvien_thanhtoan")
+    pay.get_by_role("button", name="Tôi đã chuyển khoản").click()
+    expect(pay.locator("h1")).to_have_text("Chờ quán xác nhận đã nhận tiền")
+    sv.page.goto(BASE + "/student.html#orders")
+    tile_of = lambda code: sv.page.locator(".order-tile", has=sv.page.locator(".ot-code", has_text=f"#{code}")).filter(has_text="Cơm Tấm Cô Ba")
+    first_tile = tile_of(order_code)
+    expect(first_tile).to_contain_text("Chờ quán xác nhận đã nhận tiền")
+    expect(first_tile).to_contain_text("73.000")
+    expect(first_tile.locator(".pickup-box")).to_have_count(0)                   # chưa thanh toán xong: chưa vào bếp
+    expect(first_tile.get_by_role("button", name="Hủy")).to_have_count(0)        # sinh viên không tự hủy đơn đã đặt
+    # đơn thứ 2: sinh viên chưa bấm "đã chuyển khoản"; quán thấy tiền vẫn xác nhận được, sau đó admin hủy giúp
+    sv.page.goto(BASE + "/student.html#restaurants")
+    sv.page.get_by_text("Cơm Tấm Cô Ba").first.click()
+    sv.page.locator(".menu-item", has_text="Trà đá").get_by_role("button", name="Thêm").click()
+    expect(sv.page.locator(".toast", has_text="Đã thêm 1")).to_be_visible()
+    sv.page.goto(BASE + "/student.html#cart")
+    sv.page.get_by_role("button", name=re.compile("Đặt hàng · 3.000")).click()
+    sv.page.wait_for_url(re.compile(r"#pay/"))
+    code2 = re.search(r"#(\d{3})", sv.page.locator(".pay-head").inner_text()).group(1)
+    sv.page.goto(BASE + "/student.html#orders")
+    tile2 = tile_of(code2)
+    expect(tile2).to_contain_text("Chưa thanh toán")
+    expect(tile2.get_by_role("link", name="Thanh toán")).to_be_visible()
 
-    # ---- Chủ quán nhận, xác nhận, hoàn thành
+    # ---- Chủ quán: tab Chờ tiền -> Đã nhận tiền -> tab Mới -> nhận đơn -> báo hoàn thành
     cq = Page(browser)
     cq.login("chuquan1@demo.tdtu.vn", "Demo@123")
     cq.page.wait_for_url(re.compile(r"owner\.html"))
-    order_row = cq.page.locator("tbody tr", has_text=order_code)
-    expect(order_row).to_contain_text("Chờ xác nhận")
-    expect(order_row).to_contain_text("KTX TDTU, phòng B305 (UI test)")
+    card_of = lambda page, code=None: page.locator(".order-grid:not(.lookup-hits) .order-card",
+                                                   has=page.locator(".oc-code", has_text=f"#{code or order_code}"))
+    expect(cq.page.locator(".tabs a[data-tab=orders] .tab-count")).to_be_visible()      # đơn đã báo chuyển khoản
+    cq.page.goto(BASE + "/owner.html#orders/pay")
+    order_card = card_of(cq.page)
+    expect(order_card).to_contain_text("Sinh viên báo đã chuyển 73.000")
+    expect(order_card).to_contain_text(f"TDTU {order_code}")
+    cq.shot("04a_chuquan_chotien")
+    order_card.get_by_role("button", name="Đã nhận tiền").click()
+    cq.page.locator(".dialog").get_by_role("button", name="Đã nhận tiền").click()
+    expect(cq.page.locator(".toast", has_text="Đã xác nhận nhận tiền")).to_be_visible()
+    card2 = card_of(cq.page, code2)
+    expect(card2).to_contain_text("Chờ sinh viên chuyển 3.000")
+    expect(card2.get_by_role("button", name="Chưa nhận được tiền")).to_have_count(0)    # sinh viên chưa báo chuyển
+    card2.get_by_role("button", name="Đã nhận tiền").click()
+    cq.page.locator(".dialog").get_by_role("button", name="Đã nhận tiền").click()
+    expect(cq.page.locator(".toast", has_text="Đã xác nhận nhận tiền")).to_be_visible()
+    cq.page.locator(".seg-tabs").get_by_role("link", name=re.compile("^Mới")).click()
+    expect(order_card).to_contain_text("Chờ xác nhận")
+    expect(order_card).to_contain_text("tự tới quán lấy")
+    # sinh viên đang mở Đơn của tôi: tự cập nhật khi quán nhận tiền -> đơn đặt thành công, hiện mã nhận món
+    expect(tile_of(order_code)).to_contain_text("Chờ xác nhận", timeout=15000)
+    expect(tile_of(order_code).locator(".pickup-box .pickup-code")).to_have_attribute("aria-label", "Mã nhận món " + " ".join(order_code))
+    sv.shot("03b_sinhvien_don")
+    # sinh viên tới quầy đọc mã: chủ quán gõ mã 3 số là ra đúng đơn
+    cq.page.get_by_label("Tìm đơn theo mã nhận món").fill(order_code)
+    expect(cq.page.locator(".lookup-hits .order-card").first).to_contain_text("73.000")
+    cq.page.get_by_label("Tìm đơn theo mã nhận món").fill("")
+    expect(cq.page.locator(".tabs a[data-tab=orders] .tab-count")).to_be_visible()      # số đơn chờ trên tab
     expect(cq.page.locator("main")).not_to_contain_text("null")
     cq.shot("04_chuquan_don")
-    order_row.get_by_role("button", name="Xác nhận").click()
-    expect(cq.page.locator(".toast", has_text="Đã xác nhận đơn")).to_be_visible()
-    cq.page.select_option("select[aria-label='Trạng thái']", "confirmed")
-    cq.page.locator("tbody tr", has_text=order_code).get_by_role("button", name="Hoàn thành").click()
+    order_card.get_by_role("button", name="Nhận đơn").click()
+    expect(cq.page.locator(".toast", has_text="Đã nhận đơn")).to_be_visible()
+    cq.page.locator(".seg-tabs").get_by_role("link", name=re.compile("Đang làm")).click()
+    card_of(cq.page).get_by_role("button", name="Báo hoàn thành").click()
     expect(cq.page.locator(".toast", has_text="Đơn đã hoàn thành")).to_be_visible()
     cq.page.goto(BASE + "/owner.html#notifications")
     expect(cq.page.locator(".noti", has_text=f"#{order_code}").first).to_contain_text("đơn mới")
-    # Chủ quán đăng ký quán mới qua form -> chờ duyệt (tên riêng mỗi lần chạy để test chạy lại được)
-    new_rest = f"Quán UI {run}"
-    cq.page.goto(BASE + "/owner.html#restaurants")
-    cq.page.get_by_role("button", name="+ Thêm quán").click()
-    dlg = cq.page.locator(".dialog")
-    dlg.locator("input").nth(0).fill(new_rest)
-    dlg.locator("input").nth(1).fill("Cổng C TDTU, Q7")
-    dlg.get_by_role("button", name="Gửi đăng ký").click()
+
+    # Tổng quan: chỉ số hôm nay + biểu đồ 7 ngày
+    cq.page.goto(BASE + "/owner.html#dashboard")
+    expect(cq.page.locator(".kpi", has_text="Doanh thu hôm nay").locator(".v")).to_contain_text("đ")
+    expect(cq.page.locator(".chart .bar-col")).to_have_count(7)
+    cq.shot("04b_chuquan_tongquan")
+    # Đăng ký quán mới, chọn nền có sẵn làm ảnh bìa -> chờ duyệt (tên riêng mỗi lần chạy để test chạy lại được)
+    new_rest = f"Bún Bò UI {run}"
+    cq.page.goto(BASE + "/owner.html#store/new")
+    cq.page.get_by_placeholder("VD: Cơm Tấm Cô Ba").fill(new_rest)
+    cq.page.get_by_placeholder("VD: 19 Nguyễn Hữu Thọ, Tân Phong, Q7").fill("Cổng C TDTU, Q7")
+    pv_img = cq.page.locator(".preview-card .rest-cover img")
+    expect(pv_img).to_have_attribute("src", re.compile(r"^data:image/svg"))      # chưa chọn ảnh: nền theo tên quán
+    preset = cq.page.get_by_role("button", name="Dùng nền Bún, phở, mì")
+    preset.click()
+    expect(preset).to_have_attribute("aria-pressed", "true")
+    expect(pv_img).to_have_attribute("src", re.compile(r"^blob:"))              # nền đã vẽ thành ảnh, chờ tải lên
+    expect(cq.page.locator(".image-picker .dropzone.has-img")).to_be_visible()
+    expect(cq.page.locator(".preview-card")).to_contain_text(new_rest)
+    cq.shot("04c_chuquan_chon_nen")
+    cq.page.get_by_role("button", name="Gửi đăng ký").click()
+    expect(cq.page.locator(".toast", has_text="Đã gửi đăng ký")).to_be_visible()
     expect(cq.page.locator("tbody tr", has_text=new_rest)).to_contain_text("Chờ duyệt")
+    # Thực đơn của quán mới: thêm món có ảnh + danh mục, sửa giá tại chỗ, báo hết món
+    cq.page.goto(BASE + "/owner.html#menu")
+    cq.page.get_by_role("button", name="+ Thêm món", exact=True).click()
+    dlg = cq.page.locator(".dialog")
+    dlg.get_by_placeholder("VD: Cơm tấm sườn bì chả").fill("Trà tắc UI")
+    dlg.get_by_placeholder("VD: 35.000").fill("12000")
+    expect(dlg.get_by_placeholder("VD: 35.000")).to_have_value("12.000")
+    dlg.get_by_placeholder("VD: Món chính, Đồ uống").fill("Đồ uống")
+    dlg.locator("input[type=file]").set_input_files(str(png))
+    expect(dlg.locator(".dropzone.has-img")).to_be_visible()
+    dlg.get_by_role("button", name="Thêm món").click()
+    expect(cq.page.locator(".toast", has_text="Đã thêm Trà tắc UI")).to_be_visible()
+    row = cq.page.locator(".item-row", has_text="Trà tắc UI")
+    expect(cq.page.locator(".cat-head", has_text="Đồ uống")).to_be_visible()
+    expect(row.locator(".thumb img")).to_be_visible()
+    row.get_by_role("button", name=re.compile("Sửa giá")).click()
+    cq.page.get_by_label("Giá bán (đồng)").fill("15000")
+    cq.page.get_by_label("Giá bán (đồng)").press("Enter")
+    expect(cq.page.locator(".toast", has_text="Đã đổi giá Trà tắc UI")).to_be_visible()
+    expect(cq.page.locator(".item-row", has_text="Trà tắc UI")).to_contain_text("15.000")
+    cq.page.locator(".item-row", has_text="Trà tắc UI").get_by_role("switch").click()
+    expect(cq.page.locator(".toast", has_text="Đã báo hết Trà tắc UI")).to_be_visible()
+    expect(cq.page.locator(".item-row", has_text="Trà tắc UI").get_by_role("switch")).to_have_attribute("aria-checked", "false")
+    cq.shot("04c_chuquan_thucdon")
 
     # ---- Sinh viên nhận thông báo, đánh giá
     sv.page.goto(BASE + "/student.html#notifications")
@@ -132,25 +240,55 @@ def test_full_flow_three_roles(browser):
     sv.page.get_by_role("button", name="Đánh dấu tất cả đã đọc").click()
     expect(sv.page.locator(".toast", has_text="Đã đánh dấu tất cả")).to_be_visible()
     sv.page.goto(BASE + "/student.html#orders")
-    sv.page.locator("tbody tr", has_text=order_code).get_by_role("button", name="Đánh giá").click()
+    sv.page.locator(".order-tile", has=sv.page.locator(".ot-code", has_text=f"#{order_code}")).get_by_role("button", name="Đánh giá").click()
     sv.page.get_by_role("button", name="4 sao").click()
     sv.page.get_by_placeholder(re.compile("Món ăn, thời gian giao")).fill(f"Kiểm thử giao diện {run}: ngon")
     sv.page.get_by_role("button", name="Gửi đánh giá").click()
     expect(sv.page.locator(".toast", has_text="Cảm ơn bạn đã đánh giá")).to_be_visible()
-    expect(sv.page.locator("tbody tr", has_text=order_code)).to_contain_text("Đã đánh giá")
+    expect(sv.page.locator(".order-tile", has=sv.page.locator(".ot-code", has_text=f"#{order_code}"))).to_contain_text("Đã đánh giá")
 
     # ---- Admin: tổng quan, duyệt quán, khóa user, ẩn đánh giá
     ad = Page(browser)
     ad.login("admin@demo.tdtu.vn", "Admin@123")
     ad.page.wait_for_url(re.compile(r"admin\.html"))
-    expect(ad.page.locator(".stat", has_text="Đơn hàng").locator(".v")).to_have_text(re.compile(r"^\d+$"))
+    expect(ad.page.locator(".kpi", has_text="Đơn hàng").locator(".v")).to_have_text(re.compile(r"^\d+$"))
+    expect(ad.page.locator(".donut")).to_have_count(3)                       # biểu đồ tỉ lệ: đơn, người dùng, quán
+    expect(ad.page.locator(".side-nav a.active")).to_contain_text("Bảng điều khiển")
     expect(ad.page.locator(".badge", has_text="Không phản hồi")).to_have_count(0)
     ad.shot("05_admin_tongquan")
     ad.page.goto(BASE + "/admin.html#restaurants")
     ad.page.locator("tbody tr", has_text=new_rest).get_by_role("button", name="Duyệt").click()
     expect(ad.page.locator(".toast", has_text="Đã duyệt quán")).to_be_visible()
-    cq.page.reload()
+    cq.page.goto(BASE + "/owner.html#store")
     expect(cq.page.locator("tbody tr", has_text=new_rest)).to_contain_text("Hoạt động")
+    # Sinh viên thấy đúng nền chủ quán đã chọn (ảnh tải lên Restaurant), quán khác chưa có ảnh thì có nền tượng trưng
+    sv.page.goto(BASE + "/student.html#restaurants")
+    sv.page.get_by_placeholder("Tìm theo tên quán hoặc địa chỉ…").fill(new_rest)
+    card = sv.page.locator(".card.rest", has_text=new_rest)
+    expect(card.locator(".rest-cover img")).to_have_attribute("src", re.compile(r"/uploads/[0-9a-f-]+\.jpg$"))
+    sv.page.get_by_placeholder("Tìm theo tên quán hoặc địa chỉ…").fill("")
+    expect(sv.page.locator(".card.rest").first).to_be_visible()
+    assert sv.page.locator(".card.rest").count() == sv.page.locator(".card.rest .rest-cover img").count()
+    sv.shot("05b_sinhvien_anh_bia")
+    # admin hủy đơn thứ 2 (theo lời nhờ của sinh viên): cả sinh viên và chủ quán được báo
+    ad.page.goto(BASE + "/admin.html#orders")
+    row = ad.page.locator("tbody tr", has=ad.page.locator(".mono", has_text=f"#{code2}")).filter(has_text="Cơm Tấm Cô Ba").first
+    row.get_by_role("button", name="Hủy đơn").click()
+    dlg = ad.page.locator(".dialog")
+    dlg.get_by_role("button", name="Sinh viên nhờ hủy").click()
+    dlg.get_by_role("button", name="Hủy đơn").click()
+    expect(ad.page.locator(".toast", has_text="Đã hủy đơn")).to_be_visible()
+    sv.page.goto(BASE + "/student.html#orders")
+    expect(tile_of(code2)).to_contain_text("Đã hủy")
+    expect(tile_of(code2)).to_contain_text("Quán sẽ chuyển trả 3.000")          # đã trả tiền: quán phải hoàn lại
+    # chủ quán chuyển trả rồi bấm Đã hoàn tiền -> sinh viên thấy đã hoàn
+    cq.page.goto(BASE + "/owner.html#orders/refund")
+    cq.page.get_by_label("Chọn quán").select_option("")                        # vừa tạo quán mới: xem tất cả quán
+    card_of(cq.page, code2).get_by_role("button", name="Đã hoàn tiền").click()
+    cq.page.locator(".dialog").get_by_role("button", name="Đã hoàn tiền").click()
+    expect(cq.page.locator(".toast", has_text="quán đã hoàn tiền")).to_be_visible()
+    sv.page.reload()
+    expect(tile_of(code2)).to_contain_text("Quán đã hoàn 3.000")
     ad.page.goto(BASE + "/admin.html#reviews")
     ad.page.locator("tbody tr", has_text=f"Kiểm thử giao diện {run}").get_by_role("button", name="Ẩn").click()
     ad.page.get_by_placeholder("VD: Ngôn từ không phù hợp").fill("Kiểm thử ẩn")
@@ -163,8 +301,24 @@ def test_full_flow_three_roles(browser):
     tmp.page.click("#tReg")
     email = f"ui{uuid.uuid4().hex[:6]}@student.tdtu.edu.vn"
     tmp.page.fill("#rName", "Người Kiểm Thử"); tmp.page.fill("#rEmail", email); tmp.page.fill("#rPw", "matkhau123")
+    tmp.page.click("#fReg button[type=submit]")             # chưa tick đồng ý điều khoản -> báo lỗi, không tạo tài khoản
+    expect(tmp.page.locator("#msg")).to_contain_text("Điều khoản sử dụng")
+    tmp.page.check("#rTerms")
     tmp.page.click("#fReg button[type=submit]")
     tmp.page.wait_for_url(re.compile(r"student\.html"))
+    # tài khoản vừa tạo: màn hướng dẫn nhận món (mã 3 số) hiện ra, đi hết 4 bước
+    guide = tmp.page.locator(".guide")
+    expect(guide).to_contain_text("Bước 1/4")
+    guide.get_by_role("button", name="Tiếp").click()
+    expect(guide).to_contain_text("Chuyển khoản trước")                         # bước thanh toán trước
+    for _ in range(2):
+        guide.get_by_role("button", name="Tiếp").click()
+    expect(guide).to_contain_text("Tới quán, đọc 3 số")
+    guide.get_by_role("button", name="Bắt đầu đặt món").click()
+    expect(tmp.page.locator(".guide-overlay")).to_have_count(0)
+    tmp.page.reload()
+    expect(tmp.page.get_by_role("heading", name="Quán ăn gần trường")).to_be_visible()
+    expect(tmp.page.locator(".guide-overlay")).to_have_count(0)                  # chỉ hiện một lần
     ad.page.goto(BASE + "/admin.html#users")
     ad.page.get_by_placeholder("Tên hoặc email…").fill(email)
     ad.page.locator("tbody tr", has_text=email).get_by_role("button", name="Khóa").click()
@@ -173,6 +327,19 @@ def test_full_flow_three_roles(browser):
     tmp.page.goto(BASE + "/student.html#orders")
     tmp.page.wait_for_url(re.compile(r"index\.html\?(expired|locked)=1"))
     expect(tmp.page.locator(".notice")).to_be_visible()
+
+    # Người dùng yêu cầu xóa dữ liệu -> admin xóa trong bảng chi tiết, phải gõ lại đúng email
+    ad.page.locator("tbody tr", has_text=email).get_by_role("button", name="Chi tiết").click()
+    ad.page.locator(".drawer").get_by_role("button", name="Xóa dữ liệu cá nhân").click()
+    dlg = ad.page.locator(".dialog")
+    dlg.locator("input").fill("sai@email.vn")
+    dlg.get_by_role("button", name="Xóa dữ liệu").click()
+    expect(ad.page.locator(".toast", has_text="Email xác nhận không khớp")).to_be_visible()
+    dlg.locator("input").fill(email)
+    dlg.get_by_role("button", name="Xóa dữ liệu").click()
+    expect(ad.page.locator(".toast", has_text="Đã xóa dữ liệu cá nhân")).to_be_visible()
+    ad.page.get_by_placeholder("Tên hoặc email…").fill("Người dùng đã xóa")
+    expect(ad.page.locator("tbody tr", has_text="Đã xóa dữ liệu").first).to_be_visible()
 
     errors = sv.errors + cq.errors + ad.errors
     for p in (sv, cq, ad, tmp):
@@ -200,10 +367,72 @@ def test_mobile_layout_no_horizontal_scroll(browser):
     p.shot("06_mobile_menu")
     overflow = p.page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
     assert overflow <= 1, f"trang tràn ngang {overflow}px"
+    # điện thoại: thêm món thì có thanh "Xem giỏ hàng" nổi trên thanh tab, khung giỏ hàng bên phải ẩn
+    p.page.locator(".menu-item", has_text="Nước sâm").get_by_role("button", name="Thêm").click()
+    bar = p.page.locator(".cart-bar")
+    expect(bar).to_be_visible()
+    expect(p.page.locator(".cart-side .card")).to_be_hidden()
+    bar.click()
+    p.page.wait_for_url(re.compile(r"#cart"))
+    p.page.get_by_role("button", name="Xóa giỏ").click()
+    p.page.locator(".dialog").get_by_role("button", name="Xóa giỏ").click()
+    expect(p.page.locator(".toast", has_text="Đã xóa giỏ")).to_be_visible()
     p.page.goto(BASE + "/student.html#orders")
     expect(p.page.get_by_role("heading", name="Đơn của tôi")).to_be_visible()
-    expect(p.page.locator("tbody tr").first).to_be_visible()
+    expect(p.page.locator(".order-tile").first).to_be_visible()
     p.shot("07_mobile_don")
     assert p.page.evaluate("document.documentElement.scrollWidth - window.innerWidth") <= 1
+    assert not p.errors, p.errors
+    p.close()
+
+
+def test_legal_pages_csp_and_profile_links(browser):
+    p = Page(browser, viewport=(390, 844))
+    for path, title in (("/dieu-khoan.html", "Điều khoản sử dụng"), ("/quyen-rieng-tu.html", "Chính sách quyền riêng tư")):
+        resp = p.page.goto(BASE + path)
+        assert "script-src 'self'" in resp.headers["content-security-policy"], path
+        expect(p.page.get_by_role("heading", level=1)).to_have_text(title)
+        assert p.page.evaluate("document.documentElement.scrollWidth - window.innerWidth") <= 1, f"{path} tràn ngang"
+    p.shot("08_mobile_quyen_rieng_tu")
+    p.login("sv2@demo.tdtu.vn", "Demo@123")
+    p.page.wait_for_url(re.compile(r"student\.html"))
+    p.page.goto(BASE + "/student.html#profile")
+    expect(p.page.locator(".pm-row", has_text="Chính sách quyền riêng tư")).to_be_visible()
+    expect(p.page.locator("a[data-tab=profile]")).to_have_text("Profile")
+    expect(p.page.locator(".pstat strong").first).to_have_text(re.compile(r"^\d+$"))       # số đơn đã đặt
+    # Đổi ảnh đại diện: hiện ở thẻ đầu trang và thanh trên; gỡ ảnh thì trở về chữ cái đầu
+    p.page.locator(".profile-hero input[type=file]").set_input_files(
+        {"name": "anh.png", "mimeType": "image/png", "buffer": PNG_SMALL})
+    expect(p.page.locator(".toast", has_text="Đã đổi ảnh đại diện")).to_be_visible()
+    expect(p.page.locator(".topbar .avatar img")).to_have_attribute("src", re.compile(r"/avatars/[0-9a-f]{32}\.jpg$"))
+    expect(p.page.locator(".profile-hero .avatar img")).to_be_visible()
+    p.shot("09_profile")
+    p.page.locator(".pm-row", has_text="Ảnh đại diện").click()
+    p.page.locator(".dialog").get_by_role("button", name="Gỡ ảnh").click()
+    expect(p.page.locator(".toast", has_text="Đã gỡ ảnh đại diện")).to_be_visible()
+    expect(p.page.locator(".topbar .avatar img")).to_have_count(0)
+    assert not p.errors, p.errors          # gồm cả lỗi vi phạm CSP (Chromium ghi ra console)
+    p.close()
+
+
+def test_installable_as_phone_app(browser):
+    """PWA: có manifest + biểu tượng, service worker đăng ký được, mất mạng thì có trang offline."""
+    p = Page(browser, viewport=(390, 844))
+    p.page.goto(BASE + "/index.html")
+    href = p.page.locator("link[rel=manifest]").get_attribute("href")
+    m = p.page.request.get(BASE + "/" + href)
+    assert m.headers["content-type"].startswith("application/manifest+json")
+    manifest = m.json()
+    assert manifest["display"] == "standalone" and manifest["short_name"] == "TDTU Food"
+    sizes = {i["sizes"] for i in manifest["icons"]}
+    assert {"192x192", "512x512"} <= sizes and any(i.get("purpose") == "maskable" for i in manifest["icons"])
+    for icon in manifest["icons"]:
+        assert p.page.request.get(BASE + icon["src"]).status == 200, icon["src"]
+    # trình duyệt chỉ cho service worker chạy trên HTTPS có chứng chỉ hợp lệ hoặc localhost (chứng chỉ tự ký thì không)
+    if not INSECURE and (BASE.startswith("http://127.0.0.1") or BASE.startswith("https://")):
+        scope = p.page.evaluate("Promise.race([navigator.serviceWorker.ready.then(r => r.scope),"
+                                " new Promise(ok => setTimeout(() => ok('timeout'), 10000))])")
+        assert scope.rstrip("/") == BASE, scope
+    assert p.page.request.get(BASE + "/offline.html").status == 200
     assert not p.errors, p.errors
     p.close()

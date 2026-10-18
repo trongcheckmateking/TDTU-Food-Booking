@@ -4,33 +4,63 @@ Chạy: python -m uvicorn services.auth.app:app --port 8001 (từ thư mục g�
 """
 from __future__ import annotations
 
+import ipaddress
+import logging
+import re
 import sqlite3
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import bcrypt
 import jwt
-from fastapi import Depends, Query, Security
+from fastapi import Depends, Query, Request, Security
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.concurrency import run_in_threadpool
 
 from common import config
 from common.app import create_app
 from common.db import Database, now_iso, new_id, paginate, row, transaction
 from common.errors import ApiError
 from common.http import call
-from common.security import bearer
+from common.security import bearer, require_internal
 from common.validators import Page, PageSize
 
-from .models import (SCHEMA, LoginIn, ProfileUpdate, RegisterIn, RoleUpdate, StatusUpdate, TokenOut, UserOut,
-                     UserPage)
+from .banks import BANKS, bank_name
+from .models import (SCHEMA, BankOut, EraseOut, LoginIn, PasswordChange, PayoutIn, PayoutOut, ProfileUpdate, RegisterIn,
+                     RoleUpdate, StatusUpdate, TokenOut, UserOut, UserPage)
 
+log = logging.getLogger("tdtu.auth")
 db = Database("auth.db", SCHEMA)
 ISSUER = "tdtu-food-booking-auth"
 _DUMMY_HASH = bcrypt.hashpw(b"dummy-password", bcrypt.gensalt(rounds=4))
 
+def _migrate() -> None:
+    """Nâng cấp DB cũ (idempotent, an toàn khi nhiều worker cùng khởi động)."""
+    conn = db.connect()
+    try:
+        for col in ("terms_accepted_at", "erased_at", "avatar_url", "bank_bin", "bank_account", "bank_holder"):
+            if col not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:
+                try:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError as e:      # worker khác vừa thêm cột
+                    if "duplicate column" not in str(e):
+                        raise
+    finally:
+        conn.close()
+
+
+def _startup() -> None:
+    config.jwt_secret()
+    _migrate()
+    threading.Thread(target=_replay_erasures_loop, name="erasure-replay", daemon=True).start()
+
+
 app = create_app("auth", "Auth Service", "Đăng ký, đăng nhập JWT, hồ sơ, phân quyền và quản lý tài khoản.", db,
-                 on_startup=lambda: config.jwt_secret())
+                 on_startup=_startup)
 conn_dep = db.dependency
 
 
@@ -52,8 +82,59 @@ def check_password(password: str, hashed: str | bytes) -> bool:
         return False
 
 
+# ------------------------------------------------------------------ chống dò mật khẩu
+def login_limits() -> tuple[int, int, int]:
+    """(số lần sai tối đa, cửa sổ đếm giây, thời gian khóa giây) - mặc định 5 lần / 15 phút, khóa 15 phút."""
+    return (max(1, config.get_int("LOGIN_MAX_FAILS", 5)), max(60, config.get_int("LOGIN_WINDOW_SECONDS", 900)),
+            max(60, config.get_int("LOGIN_LOCK_SECONDS", 900)))
+
+
+def _iso(t: datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def attempt_key(email: str, request: Request) -> str:
+    """Theo cặp email + IP: kẻ xấu ở máy khác không khóa được tài khoản của người khác.
+    IPv6 gộp theo dải /64 (một máy thường có cả dải, đổi địa chỉ trong dải không né được khóa)."""
+    host = request.client.host if request.client else "-"
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            host = str(ipaddress.ip_network(f"{host}/64", strict=False))
+    except ValueError:
+        pass
+    return f"{email}|{host}"
+
+
+def reserve_attempt(conn: sqlite3.Connection, key: str) -> None:
+    """Tính 1 lần thử TRƯỚC khi kiểm tra mật khẩu, trong giao dịch ghi (BEGIN IMMEDIATE): gửi hàng chục yêu cầu song
+    song cũng chỉ được tối đa LOGIN_MAX_FAILS lần thử mỗi cửa sổ. Đang bị khóa -> 429. Đăng nhập đúng thì xóa bộ đếm."""
+    max_fails, window, lock = login_limits()
+    now = datetime.now(timezone.utc)
+    with transaction(conn):
+        r = conn.execute("SELECT fails, window_start, locked_until FROM login_attempts WHERE key=?", (key,)).fetchone()
+        if r and r["locked_until"] and r["locked_until"] > _iso(now):
+            wait = int((datetime.strptime(r["locked_until"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                        - now).total_seconds()) + 1
+            raise ApiError(429, "TOO_MANY_ATTEMPTS",
+                           f"Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau {max(1, round(wait / 60))} phút",
+                           headers={"Retry-After": str(wait)})
+        fresh = not r or r["window_start"] < _iso(now - timedelta(seconds=window))
+        fails = 1 if fresh else r["fails"] + 1
+        start = _iso(now) if fresh else r["window_start"]
+        locked = _iso(now + timedelta(seconds=lock)) if fails >= max_fails else None
+        conn.execute("INSERT INTO login_attempts (key,fails,window_start,locked_until) VALUES (?,?,?,?) "
+                     "ON CONFLICT(key) DO UPDATE SET fails=excluded.fails, window_start=excluded.window_start, "
+                     "locked_until=excluded.locked_until", (key, fails, start, locked))
+        # dọn bản ghi cũ để bảng không phình
+        conn.execute("DELETE FROM login_attempts WHERE window_start < ? AND (locked_until IS NULL OR locked_until < ?)",
+                     (_iso(now - timedelta(days=1)), _iso(now)))
+
+
 def public(u: dict) -> dict:
-    return {k: u[k] for k in ("id", "name", "email", "role", "phone", "status", "created_at")}
+    out = {k: u.get(k) for k in ("id", "name", "email", "role", "phone", "status", "created_at", "terms_accepted_at",
+                                 "erased_at", "avatar_url", "bank_bin", "bank_account", "bank_holder")}
+    out["bank_name"] = bank_name(u.get("bank_bin"))
+    return out
 
 
 def issue_token(u: dict) -> str:
@@ -104,8 +185,10 @@ def register(data: RegisterIn, conn: sqlite3.Connection = Depends(conn_dep)):
     try:
         with transaction(conn):
             conn.execute("INSERT INTO users (id,name,email,password_hash,role,phone,status,token_version,created_at,"
-                         "updated_at) VALUES (?,?,?,?,?,?, 'active', 0, ?, ?)",
-                         (uid, data.name, data.email, hash_password(data.password), data.role, data.phone, ts, ts))
+                         "updated_at,terms_accepted_at,bank_bin,bank_account,bank_holder) "
+                         "VALUES (?,?,?,?,?,?, 'active', 0, ?, ?, ?, ?, ?, ?)",
+                         (uid, data.name, data.email, hash_password(data.password), data.role, data.phone, ts, ts, ts,
+                          data.bank_bin, data.bank_account, data.bank_holder))
     except sqlite3.IntegrityError as e:
         if "users.email" in str(e):
             raise ApiError(409, "EMAIL_EXISTS", "Email đã được sử dụng")
@@ -113,14 +196,18 @@ def register(data: RegisterIn, conn: sqlite3.Connection = Depends(conn_dep)):
     return public(load_user(conn, uid))
 
 
-@app.post("/api/users/login", response_model=TokenOut, tags=["auth"], summary="Đăng nhập, nhận access_token")
-def login(data: LoginIn, conn: sqlite3.Connection = Depends(conn_dep)):
+@app.post("/api/users/login", response_model=TokenOut, tags=["auth"],
+          summary="Đăng nhập, nhận access_token. Sai 5 lần trong 15 phút (cùng email + IP) thì khóa tạm 15 phút (429)")
+def login(data: LoginIn, request: Request, conn: sqlite3.Connection = Depends(conn_dep)):
+    key = attempt_key(data.email, request)
+    reserve_attempt(conn, key)
     u = row(conn.execute("SELECT * FROM users WHERE email=?", (data.email,)).fetchone())
     if not u:
         check_password(data.password, _DUMMY_HASH)          # giữ thời gian phản hồi tương đương
         raise ApiError(401, "INVALID_CREDENTIALS", "Sai email hoặc mật khẩu")
     if not check_password(data.password, u["password_hash"]):
         raise ApiError(401, "INVALID_CREDENTIALS", "Sai email hoặc mật khẩu")
+    conn.execute("DELETE FROM login_attempts WHERE key=?", (key,))
     if u["status"] != "active":
         raise ApiError(403, "ACCOUNT_LOCKED", "Tài khoản đã bị khóa, liên hệ quản trị viên")
     return {"access_token": issue_token(u), "token_type": "bearer", "expires_in": token_hours() * 3600,
@@ -152,6 +239,150 @@ def logout(u: dict = Depends(current_user), conn: sqlite3.Connection = Depends(c
         conn.execute("UPDATE users SET token_version = token_version + 1 WHERE id=?", (u["id"],))
 
 
+@app.post("/api/users/me/password", response_model=TokenOut, tags=["auth"],
+          summary="Đổi mật khẩu: các phiên đăng nhập khác bị thu hồi, trả token mới cho phiên hiện tại")
+def change_password(data: PasswordChange, request: Request, u: dict = Depends(current_user),
+                    conn: sqlite3.Connection = Depends(conn_dep)):
+    key = attempt_key("pw:" + u["email"], request)        # đoán mật khẩu cũ bằng token lấy cắp cũng bị giới hạn
+    reserve_attempt(conn, key)
+    if not check_password(data.current_password, u["password_hash"]):
+        raise ApiError(400, "WRONG_PASSWORD", "Mật khẩu hiện tại không đúng")
+    if data.new_password == data.current_password:
+        raise ApiError(400, "SAME_PASSWORD", "Mật khẩu mới phải khác mật khẩu hiện tại")
+    with transaction(conn):
+        conn.execute("UPDATE users SET password_hash=?, token_version=token_version+1, updated_at=? WHERE id=?",
+                     (hash_password(data.new_password), now_iso(), u["id"]))
+        conn.execute("DELETE FROM login_attempts WHERE key=?", (key,))
+    fresh = load_user(conn, u["id"])
+    return {"access_token": issue_token(fresh), "token_type": "bearer", "expires_in": token_hours() * 3600,
+            "user": public(fresh)}
+
+
+# ------------------------------------------------------------------ tài khoản nhận tiền của chủ quán (VietQR)
+@app.get("/api/banks", response_model=list[BankOut], tags=["auth"],
+         summary="Ngân hàng nhận tiền qua mã VietQR (cho form đăng ký chủ quán)")
+def list_banks():
+    return BANKS
+
+
+@app.put("/api/users/me/payout", response_model=UserOut, tags=["auth"],
+         summary="Chủ quán đổi tài khoản nhận tiền (cần nhập lại mật khẩu)",
+         description="Đơn đã đặt giữ nguyên tài khoản lúc đặt; đơn mới dùng tài khoản này. Nhập sai mật khẩu bị tính vào "
+                     "giới hạn chống dò mật khẩu như đổi mật khẩu.")
+def set_payout(data: PayoutIn, request: Request, u: dict = Depends(current_user),
+               conn: sqlite3.Connection = Depends(conn_dep)):
+    if u["role"] != "chu_quan":
+        raise ApiError(403, "FORBIDDEN", "Chỉ tài khoản chủ quán có tài khoản nhận tiền")
+    key = attempt_key("pw:" + u["email"], request)        # token bị lấy cắp cũng không đổi được nơi nhận tiền
+    reserve_attempt(conn, key)
+    if not check_password(data.password, u["password_hash"]):
+        raise ApiError(400, "WRONG_PASSWORD", "Mật khẩu hiện tại không đúng")
+    with transaction(conn):
+        conn.execute("UPDATE users SET bank_bin=?, bank_account=?, bank_holder=?, updated_at=? WHERE id=?",
+                     (data.bank_bin, data.bank_account, data.bank_holder, now_iso(), u["id"]))
+        conn.execute("DELETE FROM login_attempts WHERE key=?", (key,))
+    return public(load_user(conn, u["id"]))
+
+
+@app.get("/internal/users/{user_id}/payout", response_model=PayoutOut, tags=["internal"],
+         dependencies=[Depends(require_internal)],
+         summary="Tài khoản nhận tiền của chủ quán (Order chụp vào đơn lúc đặt để tạo mã VietQR)",
+         responses={404: {"description": "PAYOUT_MISSING: không phải chủ quán hoặc chưa khai báo"}})
+def internal_payout(user_id: uuid.UUID, conn: sqlite3.Connection = Depends(conn_dep)):
+    u = row(conn.execute("SELECT * FROM users WHERE id=?", (str(user_id),)).fetchone())
+    if not u or u["role"] != "chu_quan" or u.get("erased_at") or not (u.get("bank_bin") and u.get("bank_account")):
+        raise ApiError(404, "PAYOUT_MISSING", "Chủ quán chưa khai báo tài khoản nhận tiền")
+    return {"user_id": u["id"], "bank_bin": u["bank_bin"], "bank_name": bank_name(u["bank_bin"]) or u["bank_bin"],
+            "bank_account": u["bank_account"], "bank_holder": u["bank_holder"] or ""}
+
+
+# ------------------------------------------------------------------ ảnh đại diện
+AVATAR_MAX_BYTES = 1024 * 1024                  # trình duyệt đã thu nhỏ còn 512×512 JPEG (~50 KB)
+AVATAR_FILE = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp)$")
+AVATAR_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+
+
+def avatar_dir():
+    d = config.data_dir() / "avatars"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _image_ext(data: bytes) -> str | None:
+    """Nhận dạng ảnh theo nội dung (không tin Content-Type): JPEG, PNG, WebP."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def remove_avatar_file(url: str | None) -> None:
+    name = (url or "").rsplit("/", 1)[-1]
+    if (url or "").startswith("/avatars/") and AVATAR_FILE.match(name):
+        (avatar_dir() / name).unlink(missing_ok=True)
+
+
+def _save_avatar(user_id: str, data: bytes, ext: str) -> dict:
+    name = f"{uuid.uuid4().hex}.{ext}"            # tên ngẫu nhiên, không đoán được
+    tmp = avatar_dir() / (name + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(avatar_dir() / name)
+    conn = db.connect()
+    try:
+        old = row(conn.execute("SELECT avatar_url FROM users WHERE id=?", (user_id,)).fetchone())
+        with transaction(conn):
+            conn.execute("UPDATE users SET avatar_url=?, updated_at=? WHERE id=?", (f"/avatars/{name}", now_iso(), user_id))
+        remove_avatar_file(old and old["avatar_url"])
+        return public(load_user(conn, user_id))
+    finally:
+        conn.close()
+
+
+@app.put("/api/users/me/avatar", response_model=UserOut, tags=["auth"],
+         summary="Đổi ảnh đại diện: gửi thẳng nội dung ảnh JPEG/PNG/WebP (tối đa 1 MB), ảnh cũ bị xóa",
+         openapi_extra={"requestBody": {"required": True, "content": {
+             t: {"schema": {"type": "string", "format": "binary"}} for t in AVATAR_TYPES.values()}}})
+async def set_avatar(request: Request, u: dict = Depends(current_user)):
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > AVATAR_MAX_BYTES:
+        raise ApiError(413, "PAYLOAD_TOO_LARGE", "Ảnh đại diện tối đa 1 MB")
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > AVATAR_MAX_BYTES:
+            raise ApiError(413, "PAYLOAD_TOO_LARGE", "Ảnh đại diện tối đa 1 MB")
+    ext = _image_ext(bytes(data[:16]))
+    if not ext:
+        raise ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Ảnh đại diện phải là ảnh JPEG, PNG hoặc WebP")
+    return await run_in_threadpool(_save_avatar, u["id"], bytes(data), ext)
+
+
+@app.delete("/api/users/me/avatar", response_model=UserOut, tags=["auth"], summary="Gỡ ảnh đại diện")
+def delete_avatar(u: dict = Depends(current_user), conn: sqlite3.Connection = Depends(conn_dep)):
+    with transaction(conn):
+        conn.execute("UPDATE users SET avatar_url=NULL, updated_at=? WHERE id=?", (now_iso(), u["id"]))
+    remove_avatar_file(u.get("avatar_url"))
+    return public(load_user(conn, u["id"]))
+
+
+@app.get("/avatars/{name}", tags=["auth"], summary="Tệp ảnh đại diện (đường dẫn lấy từ avatar_url)",
+         response_class=FileResponse, responses={200: {"content": {t: {} for t in AVATAR_TYPES.values()}}})
+def get_avatar(name: str):
+    m = AVATAR_FILE.match(name)
+    path = avatar_dir() / name if m else None
+    if not path or not path.is_file():
+        raise ApiError(404, "NOT_FOUND", "Không tìm thấy ảnh")
+    return FileResponse(path, media_type=AVATAR_TYPES[m.group(1)], headers={
+        "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
+        "Cross-Origin-Resource-Policy": "cross-origin", "Cache-Control": "public, max-age=31536000, immutable"})
+
+
 # ------------------------------------------------------------------ admin
 @app.get("/api/users", response_model=UserPage, tags=["admin"], summary="Danh sách tài khoản (admin)")
 def list_users(role: Literal["sinh_vien", "chu_quan", "admin"] | None = None,
@@ -179,6 +410,11 @@ def _active_admins(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND status='active'").fetchone()[0]
 
 
+def ensure_not_erased(target: dict) -> None:
+    if target.get("erased_at"):
+        raise ApiError(409, "USER_ERASED", "Tài khoản đã bị xóa dữ liệu cá nhân, không thể thay đổi")
+
+
 def _owned_restaurants(owner_id: str) -> int:
     _, data = call("GET", f"{config.service_url('RESTAURANT')}/internal/owners/{owner_id}/restaurant-count",
                    "Restaurant Service", internal=True)
@@ -195,6 +431,7 @@ def change_role(user_id: uuid.UUID, data: RoleUpdate, me_: dict = Depends(admin_
     target = load_user(conn, str(user_id))
     if target["id"] == me_["id"]:
         raise ApiError(400, "SELF_ACTION", "Không thể tự đổi vai trò của chính mình")
+    ensure_not_erased(target)
     if target["role"] == data.role:
         return public(target)
     if target["role"] == "chu_quan" and _owned_restaurants(target["id"]) > 0:
@@ -215,6 +452,7 @@ def change_status(user_id: uuid.UUID, data: StatusUpdate, me_: dict = Depends(ad
     target = load_user(conn, str(user_id))
     if target["id"] == me_["id"]:
         raise ApiError(400, "SELF_ACTION", "Không thể tự khóa tài khoản của chính mình")
+    ensure_not_erased(target)
     if target["status"] == data.status:
         return public(target)
     with transaction(conn):
@@ -223,3 +461,116 @@ def change_status(user_id: uuid.UUID, data: StatusUpdate, me_: dict = Depends(ad
         conn.execute("UPDATE users SET status=?, token_version=token_version+1, updated_at=? WHERE id=?",
                      (data.status, now_iso(), target["id"]))
     return public(load_user(conn, target["id"]))
+
+
+# ------------------------------------------------------------------ xóa dữ liệu cá nhân theo yêu cầu
+ERASED_NAME = "Người dùng đã xóa"
+# Order trước: là nơi có thể từ chối (còn đơn đang xử lý, với vai trò người đặt hoặc chủ quán) khi chưa đổi gì ở đâu
+ERASE_STEPS = (("ORDER", "Order Service"), ("RESTAURANT", "Restaurant Service"), ("REVIEW", "Review Service"),
+               ("NOTIFICATION", "Notification Service"))
+
+
+@app.post("/api/users/{user_id}/erase", response_model=EraseOut, tags=["admin"],
+          summary="Xóa dữ liệu cá nhân theo yêu cầu của người dùng (admin)",
+          description="Khóa tài khoản và thu hồi token, rồi lần lượt yêu cầu Order (ẩn danh người đặt trong đơn, xóa giỏ), "
+                      "Restaurant (gỡ quán của chủ quán, xóa ảnh), Review (ẩn danh tên người viết), Notification (xóa "
+                      "thông báo); cuối cùng thay họ tên, email, số điện thoại trong Auth. Từ chối 409 khi tài khoản còn "
+                      "đơn đang xử lý (tài khoản vẫn bị khóa để không phát sinh đơn mới). Gọi lại nhiều lần an toàn.")
+def erase_user(user_id: uuid.UUID, me_: dict = Depends(admin_only), conn: sqlite3.Connection = Depends(conn_dep)):
+    target = load_user(conn, str(user_id))
+    if target["id"] == me_["id"]:
+        raise ApiError(400, "SELF_ACTION", "Không thể tự xóa dữ liệu tài khoản của chính mình")
+    return erase_everywhere(conn, target)
+
+
+def erase_everywhere(conn: sqlite3.Connection, target: dict) -> dict:
+    with transaction(conn):
+        if target["role"] == "admin" and target["status"] == "active" and _active_admins(conn) <= 1:
+            raise ApiError(409, "LAST_ADMIN", "Không thể xóa admin cuối cùng")
+        # khóa + thu hồi token trước: trong lúc xóa, tài khoản không tạo thêm đơn hay đánh giá
+        conn.execute("UPDATE users SET status='locked', token_version=token_version+1, updated_at=? WHERE id=?",
+                     (now_iso(), target["id"]))
+    results = {}
+    for name, label in ERASE_STEPS:
+        status, body = call("POST", f"{config.service_url(name)}/internal/users/{target['id']}/erase", label,
+                            internal=True, allow=(409,))
+        if status == 409:
+            detail = body.get("detail") if isinstance(body, dict) else None
+            code = body.get("code") if isinstance(body, dict) else None
+            raise ApiError(409, code or "ERASE_BLOCKED",
+                           f"{detail or label + ' chưa xóa được dữ liệu'}. Tài khoản đã được khóa; xử lý xong rồi thực hiện lại.")
+        results[name.lower()] = body
+    ts = now_iso()
+    with transaction(conn):
+        # password_hash "!" không phải bcrypt hợp lệ -> không mật khẩu nào khớp
+        conn.execute("UPDATE users SET name=?, email=?, phone=NULL, password_hash='!', status='locked', avatar_url=NULL, "
+                     "bank_bin=NULL, bank_account=NULL, bank_holder=NULL, "
+                     "erased_at=COALESCE(erased_at, ?), updated_at=? WHERE id=?",
+                     (ERASED_NAME, f"da-xoa-{target['id']}@tdtu-food.invalid", ts, ts, target["id"]))
+        conn.execute("DELETE FROM login_attempts WHERE substr(key, 1, ?) = ?",
+                     (len(target["email"]) + 1, target["email"] + "|"))
+    remove_avatar_file(target.get("avatar_url"))
+    _journal_erasure(target["id"], ts)
+    return {"user": public(load_user(conn, target["id"])), "services": results}
+
+
+# Nhật ký yêu cầu xóa: chỉ ghi ID (không có dữ liệu cá nhân), nằm cạnh auth.db nhưng không thuộc bản sao lưu nên không
+# bị khôi phục đè. Khôi phục bản sao lưu cũ hơn lần xóa -> Auth khởi động lại sẽ tự xóa lại người đó ở mọi service.
+_journal_lock = threading.Lock()
+
+
+def erasure_log_path():
+    return config.data_dir() / "erasures.log"
+
+
+def _journal_erasure(user_id: str, ts: str) -> None:
+    with _journal_lock, open(erasure_log_path(), "a", encoding="utf-8") as f:
+        f.write(f"{user_id}\t{ts}\n")
+
+
+def erased_ids() -> list[str]:
+    try:
+        lines = erasure_log_path().read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    out: list[str] = []
+    for line in lines:
+        uid = line.split("\t", 1)[0].strip()
+        try:
+            uid = str(uuid.UUID(uid))
+        except ValueError:
+            continue
+        if uid not in out:
+            out.append(uid)
+    return out
+
+
+def replay_erasures() -> int:
+    """Xóa lại những tài khoản có trong nhật ký mà DB hiện tại chưa xóa. Trả về số tài khoản chưa xóa lại được."""
+    pending = 0
+    conn = db.connect()
+    try:
+        for uid in erased_ids():
+            u = row(conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
+            if not u or u.get("erased_at"):
+                continue
+            try:
+                erase_everywhere(conn, u)
+                log.warning("Đã áp dụng lại yêu cầu xóa dữ liệu của tài khoản %s (dữ liệu khôi phục từ bản sao lưu cũ)", uid)
+            except ApiError as e:
+                pending += 1
+                log.warning("Chưa áp dụng lại được yêu cầu xóa dữ liệu của %s: %s (%s)", uid, e.message, e.code)
+    finally:
+        conn.close()
+    return pending
+
+
+def _replay_erasures_loop(attempts: int = 40, every: float = 30.0) -> None:
+    """Chạy nền khi Auth khởi động: các service khác có thể chưa sẵn sàng nên thử lại mỗi 30 giây, tối đa 20 phút."""
+    for _ in range(attempts):
+        try:
+            if replay_erasures() == 0:
+                return
+        except Exception:                      # noqa: BLE001 - không để luồng nền làm sập Auth
+            log.exception("Lỗi khi áp dụng lại nhật ký xóa dữ liệu")
+        time.sleep(every)

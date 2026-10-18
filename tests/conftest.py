@@ -142,6 +142,9 @@ class Client:
     def patch(self, path, **kw):
         return self.request("PATCH", path, **kw)
 
+    def put(self, path, **kw):
+        return self.request("PUT", path, **kw)
+
     def delete(self, path, **kw):
         return self.request("DELETE", path, **kw)
 
@@ -237,11 +240,15 @@ def cluster(tmp_path_factory):
 
 
 # ---------------------------------------------------------------------------- tiện ích cho test
+TEST_BANK = {"bank_bin": "970436", "bank_account": "0071000123456", "bank_holder": "Chủ Quán Test"}
+
+
 class System:
     def __init__(self, cluster: Cluster):
         self.c = cluster
         self.tag = uuid.uuid4().hex[:8]
         self.clients = {s: Client(cluster.url[s]) for s in SERVICES}
+        self.owners: dict[str, dict] = {}            # quán -> token chủ quán (để xác nhận đã nhận tiền)
 
     def __getattr__(self, name):
         if name in SERVICES:
@@ -256,10 +263,12 @@ class System:
         name, domain = local.split("@")
         return f"{name}.{self.tag}@{domain}"
 
-    def register(self, email, role="sinh_vien", name="Người Dùng", password="matkhau123", phone=None):
-        body = {"name": name, "email": email, "password": password, "role": role}
+    def register(self, email, role="sinh_vien", name="Người Dùng", password="matkhau123", phone=None, bank=None):
+        body = {"name": name, "email": email, "password": password, "role": role, "accept_terms": True}
         if phone:
             body["phone"] = phone
+        if role == "chu_quan":                      # chủ quán bắt buộc khai báo tài khoản nhận tiền (VietQR)
+            body.update(bank or TEST_BANK)
         r = self.auth.post("/api/users/register", json=body)
         assert r.status_code == 201, r.text
         return r.json()
@@ -292,6 +301,7 @@ class System:
         r = self.restaurant.post("/api/restaurants", headers=owner, json={"name": name, "address": "19 Nguyễn Hữu Thọ, Q7"})
         assert r.status_code == 201, r.text
         rid = r.json()["id"]
+        self.owners[rid] = owner
         assert self.restaurant.patch(f"/api/admin/restaurants/{rid}/status", headers=admin,
                                      json={"status": "active"}).status_code == 200
         ids = []
@@ -301,7 +311,17 @@ class System:
             ids.append(m.json()["id"])
         return rid, ids
 
-    def place_order(self, student: dict, rid: str, lines: list[tuple[str, int]], key: str | None = None):
+    def pay_order(self, student: dict, oid: str, owner: dict) -> dict:
+        """Sinh viên báo đã chuyển khoản, chủ quán xác nhận đã nhận tiền -> đơn đặt thành công."""
+        r = self.order.post(f"/api/orders/{oid}/payment/claim", headers=student)
+        assert r.status_code == 200, r.text
+        r = self.order.post(f"/api/orders/{oid}/payment/confirm", headers=owner)
+        assert r.status_code == 200 and r.json()["payment"]["status"] == "paid", r.text
+        return r.json()
+
+    def place_order(self, student: dict, rid: str, lines: list[tuple[str, int]], key: str | None = None,
+                    pay: bool = True):
+        """Đặt đơn; mặc định trả tiền luôn (đơn đặt thành công như sinh viên thấy). pay=False: đơn chờ thanh toán."""
         self.order.delete("/api/cart", headers=student)
         for iid, q in lines:
             r = self.order.post("/api/cart/items", headers=student,
@@ -312,7 +332,7 @@ class System:
             h["Idempotency-Key"] = key
         r = self.order.post("/api/orders/checkout", headers=h, json={"delivery_address": "KTX TDTU B305"})
         assert r.status_code == 201, r.text
-        return r.json()
+        return self.pay_order(student, r.json()["id"], self.owners[rid]) if pay else r.json()
 
 
 @pytest.fixture

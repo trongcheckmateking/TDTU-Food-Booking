@@ -14,6 +14,8 @@
   python manage.py reset-demo --yes  XÓA dữ liệu (SQLite, H2, bảng PostgreSQL) rồi start + seed lại
   python manage.py test-services   Chạy test riêng của từng service (node --test, go test, php, JUnit)
   python manage.py export-openapi  Xuất OpenAPI của 5 service vào docs/openapi/
+  python manage.py backup          Sao lưu 5 cơ sở dữ liệu + ảnh vào backups/ (--list, --verify TỆP, --loop)
+  python manage.py restore TỆP --yes  Khôi phục từ bản sao lưu (dừng hệ thống trước; dữ liệu cũ được giữ lại)
 """
 from __future__ import annotations
 
@@ -261,7 +263,7 @@ def cmd_create_admin(args) -> None:
     from services.auth.admin_tools import create_admin
     email = args.email or input("Email admin: ").strip()
     name = args.name or input("Họ tên: ").strip()
-    pw = os.environ.get("ADMIN_PASSWORD") or getpass.getpass("Mật khẩu (6–72 byte): ")
+    pw = os.environ.get("ADMIN_PASSWORD") or getpass.getpass("Mật khẩu (từ 8 ký tự, có cả chữ và số): ")
     try:
         created = create_admin(email, name, pw)
     except ValueError as e:
@@ -351,6 +353,22 @@ def service_command(name: str, host: str, port: int) -> tuple[list[str], Path, d
     raise ValueError(name)
 
 
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_KEEP = 3
+
+
+def rotate_logs() -> None:
+    """Log quá 5 MB thì đổi tên thành .1 (.1 -> .2 ...), giữ 3 bản cũ: chạy lâu ngày không đầy ổ đĩa."""
+    for log in LOG_DIR.glob("*.log"):
+        if log.stat().st_size < LOG_MAX_BYTES:
+            continue
+        for i in range(LOG_KEEP - 1, 0, -1):
+            older = log.with_name(f"{log.name}.{i}")
+            if older.exists():
+                os.replace(older, log.with_name(f"{log.name}.{i + 1}"))
+        os.replace(log, log.with_name(log.name + ".1"))
+
+
 def cmd_start(args) -> None:
     ensure_env()
     running = {k: v for k, v in read_pids().items() if alive(v)}
@@ -371,6 +389,7 @@ def cmd_start(args) -> None:
     cmd_init_db()
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    rotate_logs()
     pids = {}
     for name, (cmd, cwd, extra) in plans.items():
         log = open(LOG_DIR / f"{name}.log", "a", encoding="utf-8")
@@ -501,6 +520,18 @@ def cmd_export_openapi(_) -> None:
         print("  ", out / f"{s}.json")
 
 
+def cmd_backup(args) -> None:
+    ensure_env()
+    cmd = ["create", "--loop"] if args.loop else ["list"] if args.list else ["verify", args.verify] if args.verify else ["create"]
+    sys.exit(subprocess.run([sys.executable, str(ROOT / "scripts" / "backup.py"), *cmd], env=child_env()).returncode)
+
+
+def cmd_restore(args) -> None:
+    ensure_env()
+    cmd = ["restore", args.file] + (["--yes"] if args.yes else []) + (["--force"] if args.force else [])
+    sys.exit(subprocess.run([sys.executable, str(ROOT / "scripts" / "backup.py"), *cmd], env=child_env()).returncode)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Vận hành TDTU Food Booking (5 service, 5 ngôn ngữ)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -520,6 +551,16 @@ def main() -> None:
     r = sub.add_parser("reset-demo"); r.add_argument("--yes", action="store_true"); r.set_defaults(fn=cmd_reset_demo)
     sub.add_parser("test-services").set_defaults(fn=cmd_test_services)
     sub.add_parser("export-openapi").set_defaults(fn=cmd_export_openapi)
+    k = sub.add_parser("backup", help="sao lưu dữ liệu 5 service + ảnh vào BACKUP_DIR")
+    k.add_argument("--loop", action="store_true", help="chạy liên tục, mỗi BACKUP_INTERVAL_HOURS giờ một bản")
+    k.add_argument("--list", action="store_true", help="liệt kê các bản sao lưu")
+    k.add_argument("--verify", metavar="TỆP", help="kiểm tra một tệp sao lưu")
+    k.set_defaults(fn=cmd_backup)
+    rs = sub.add_parser("restore", help="khôi phục từ một tệp sao lưu (hệ thống phải đang dừng)")
+    rs.add_argument("file")
+    rs.add_argument("--yes", action="store_true", help="xác nhận thay dữ liệu hiện tại")
+    rs.add_argument("--force", action="store_true", help="bỏ qua kiểm tra service đang chạy")
+    rs.set_defaults(fn=cmd_restore)
     args = ap.parse_args()
     args.fn(args)
 
