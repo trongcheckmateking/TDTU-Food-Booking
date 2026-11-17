@@ -5,19 +5,19 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
 
 | CSDL | Service (ngôn ngữ) | Thư viện truy cập | Bảng | Nguồn schema |
 | --- | --- | --- | --- | --- |
-| `DATA_DIR/auth.db` (SQLite) | Auth (Python) | `sqlite3` | `users` | `services/auth/models.py` |
+| `DATA_DIR/auth.db` (SQLite) | Auth (Python) | `sqlite3` | `users`, `login_attempts`, `otp_codes` | `services/auth/models.py` |
 | `DATA_DIR/restaurant.db` (SQLite) | Restaurant (Node.js) | `node:sqlite` | `restaurants`, `menu_items`, `menu_updates` | `services/restaurant/src/db.js` |
-| `DATA_DIR/order.mv.db` (H2 dạng tệp) | Order (Java) | Spring `JdbcTemplate` + HikariCP | `carts`, `cart_items`, `orders`, `order_items`, `notification_outbox` | `services/order/src/main/resources/schema.sql` |
-| PostgreSQL `tdtu_notification` | Notification (Go) | GORM + pgx | `notifications` | `services/notification/store.go` |
+| `DATA_DIR/order.mv.db` (H2 dạng tệp) | Order (Java) | Spring `JdbcTemplate` + HikariCP | `carts`, `cart_items`, `orders`, `order_items`, `notification_outbox`, `pickup_counters` | `services/order/src/main/resources/schema.sql` |
+| PostgreSQL `tdtu_notification` | Notification (Go) | GORM + pgx | `notifications`, `email_logs` | `services/notification/store.go` |
 | `DATA_DIR/review.db` (SQLite) | Review (PHP) | PDO | `reviews` | `services/review/src/Database.php` |
 
 ## Khóa ngoại thật và tham chiếu logic
 
-- **Khóa ngoại thật (cùng DB):** `menu_items.restaurant_id → restaurants.id`, `cart_items.cart_id → carts.id`,
+- **Khóa ngoại thật (cùng DB):** `otp_codes.user_id → users.id` (`ON DELETE CASCADE`), `menu_items.restaurant_id → restaurants.id`, `cart_items.cart_id → carts.id`,
   `order_items.order_id → orders.id`, `notification_outbox.order_id → orders.id`.
 - **Tham chiếu logic xuyên service (không có FK, không thể ràng buộc ở DB):** mọi `user_id`, `owner_id`,
   `restaurant_owner_id` (→ Auth), `restaurant_id`, `item_id` trong Order/Review (→ Restaurant), `order_id` trong
-  Notification/Review (→ Order). Tính đúng đắn được bảo đảm bằng API: Order báo giá qua Restaurant trước khi ghi,
+  Notification/Review (→ Order), `email_logs.user_id` (→ Auth). Tính đúng đắn được bảo đảm bằng API: Order báo giá qua Restaurant trước khi ghi,
   Review xác minh đơn qua Order, Notification nhận ID từ sự kiện của Order.
 - ERD (`docs/diagrams/erd/`) vẽ FK thật bằng nét liền, tham chiếu logic bằng nét đứt.
 
@@ -27,7 +27,8 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
 - Yêu cầu xóa dữ liệu cá nhân (Chính sách quyền riêng tư, mục 8): admin gọi `POST /api/users/{id}/erase`, Auth khóa tài
   khoản rồi gọi `/internal/users/{id}/erase` của Order (tên → "Người dùng đã xóa", xóa số điện thoại, chỗ nhận, ghi chú;
   xóa giỏ), Restaurant (xóa mềm mọi quán của chủ quán, xóa ảnh), Review (ẩn danh tên người viết), Notification (xóa
-  thông báo), cuối cùng ẩn danh họ tên, email, số điện thoại trong `users` và ghi `erased_at`. Số tiền, món, số sao giữ
+  thông báo và nhật ký email `email_logs`, vì có địa chỉ email), cuối cùng ẩn danh họ tên, email, số điện thoại trong
+  `users`, xóa mọi mã `otp_codes` của tài khoản và ghi `erased_at`. Số tiền, món, số sao giữ
   nguyên nên thống kê không đổi. Order từ chối khi còn đơn `pending`/`confirmed`.
 - Sao lưu: `scripts/backup.py` lấy bản sao nhất quán của cả 5 cơ sở dữ liệu khi hệ thống đang chạy (API backup của
   SQLite, `BACKUP TO` của H2 qua `GET /internal/backup` của Order, `pg_dump`), kèm ảnh quán (`uploads/` của Restaurant)
@@ -46,6 +47,9 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
 | `orders UNIQUE(user_id, idempotency_key)` | Chống tạo đơn trùng khi bấm lặp/thử lại |
 | `notification_outbox.event_key UNIQUE` | Mỗi sự kiện của đơn chỉ ghi 1 lần |
 | `notifications UNIQUE(event_key, user_id)` | Gửi lại sự kiện không nhân đôi thông báo |
+| `otp_codes.code_hash` = HMAC-SHA256(JWT_SECRET, "otp:<id>:<mã>") | Không lưu mã OTP; lộ DB cũng không biết mã |
+| `email_logs.idempotency_key UNIQUE` (`otp-<otp_id>`) | Auth gửi lại cùng mã không gửi thư lần 2 |
+| `email_logs.provider_message_id UNIQUE` | Webhook của nhà cung cấp cập nhật đúng một bản ghi |
 | `reviews.order_id UNIQUE`, `CHECK rating 1–5`, `CHECK length(comment) ≤ 1000` | 1 đơn 1 đánh giá, kể cả gửi đồng thời |
 | `CHECK` trên mọi cột trạng thái | Không ghi trạng thái lạ |
 
@@ -58,7 +62,13 @@ khi service khởi động (chạy lại an toàn). Phần SQL bên dưới đư
   `cancelled_by = he_thong`); hủy đơn `paid` (hoặc admin hủy đơn `claimed`) → `refund_due →(quán: đã hoàn tiền) refunded`.
   Báo cáo, thống kê chỉ tính đơn `paid / refund_due / refunded` (đơn đặt thành công).
 - Quán: `pending →(admin duyệt) active ↔(chủ quán) closed`; `* →(admin) locked →(admin) active`.
-- Outbox: `pending → sending → sent` hoặc `→ failed → sending → …` (tối đa 10 lần).
+- Outbox: `pending → sending → sent` hoặc `→ failed → sending → …` (tối đa 10 lần). API trả một đơn có thêm
+  `notification_status` tính từ mọi dòng outbox của đơn: `none` (chưa có sự kiện) / `failed` / `pending` / `sent`.
+- Mã OTP (`otp_codes`): tạo lúc đăng ký / gửi lại (mã cũ bị vô hiệu: điền `used_at`); mỗi lần nhập sai cộng
+  `attempts` TRƯỚC khi so mã (UPDATE có điều kiện trong `BEGIN IMMEDIATE`), đủ `OTP_MAX_ATTEMPTS` thì khóa; đúng mã →
+  `used_at` + `users.email_verified_at`; quá `expires_at` → hết hạn.
+- Nhật ký email (`email_logs`): `sending → sent` (nhà cung cấp nhận) `→ delivered / failed` (webhook có ký HMAC); lỗi gọi
+  nhà cung cấp → `failed` (gửi lại trên chính dòng đó); `sending` quá 30 giây coi như bỏ dở, được gửi lại.
 
 ## Dữ liệu demo
 
@@ -74,7 +84,15 @@ Test tự động dùng thư mục dữ liệu tạm và schema PostgreSQL tạm
 ## Thay đổi schema sau này
 
 Dự án chưa dùng công cụ migration. Khi đổi schema: thêm lệnh `ALTER TABLE` có kiểm tra (idempotent) vào phần tạo
-bảng của service tương ứng, hoặc với dữ liệu demo chạy `reset-demo`.
+bảng của service tương ứng, hoặc với dữ liệu demo chạy `reset-demo`. Ví dụ đã làm:
+
+- Auth thêm `users.email_verified_at`: `_migrate()` chạy `ALTER TABLE` và `UPDATE users SET email_verified_at =
+  created_at` trong CÙNG giao dịch, chỉ đúng lúc vừa thêm cột (tài khoản có từ trước coi như đã xác nhận); chạy ở mỗi
+  lần khởi động thì người chưa nhập mã OTP cũng bị coi là đã xác nhận. Không tạo index trên cột mới trong `SCHEMA`
+  (DB cũ chạy `SCHEMA` trước `_migrate()`).
+- Order sửa sự kiện đơn tiền mặt: bản cũ ghi `order_created_cash`, Notification không nhận tên này (422) nên chủ quán
+  không được báo. Cuối `schema.sql` có `UPDATE` đổi các dòng outbox chưa gửi sang `order_created` và cho gửi lại ngay
+  (xem khối SQL của Order bên dưới); chạy lại nhiều lần không sao.
 
 ## Schema (trích từ mã)
 
@@ -95,12 +113,26 @@ CREATE TABLE IF NOT EXISTS users (
     terms_accepted_at TEXT,                        -- lúc đồng ý Điều khoản + Chính sách quyền riêng tư (bằng chứng đồng ý)
     erased_at     TEXT,                            -- lúc xóa dữ liệu cá nhân theo yêu cầu (tên/email/SĐT đã ẩn danh)
     avatar_url    TEXT,                            -- /avatars/<tên ngẫu nhiên>.jpg|png|webp (tệp trong DATA_DIR/avatars)
-    -- tài khoản nhận tiền của chủ quán (thêm 16/10/2026): sinh viên chuyển khoản trước bằng mã VietQR tạo từ 3 cột này
-    bank_bin      TEXT,                            -- mã ngân hàng 6 số của Napas (services/auth/banks.py)
+    -- tài khoản nhận tiền của chủ quán: sinh viên chuyển khoản trước bằng mã VietQR tạo từ 3 cột này
+    bank_bin      TEXT,                            -- mã ngân hàng 6 số của Napas (banks.py)
     bank_account  TEXT,                            -- số tài khoản 6-19 chữ số
-    bank_holder   TEXT                             -- tên chủ tài khoản, in hoa không dấu
+    bank_holder   TEXT,                            -- tên chủ tài khoản, in hoa không dấu
+    email_verified_at TEXT                         -- lúc xác nhận email bằng mã OTP (NULL = chưa xác nhận)
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+-- Mã OTP xác nhận email: KHÔNG lưu mã, chỉ lưu HMAC-SHA256(JWT_SECRET, "otp:<id>:<mã>").
+-- Mỗi user tối đa 1 mã còn hiệu lực (used_at IS NULL): gửi mã mới thì mã cũ bị vô hiệu (điền used_at).
+CREATE TABLE IF NOT EXISTS otp_codes (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose    TEXT NOT NULL CHECK (purpose IN ('verify_email')),
+    code_hash  TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0,              -- số lần nhập sai (đủ OTP_MAX_ATTEMPTS thì khóa mã)
+    used_at    TEXT,                                    -- đã xác nhận thành công, hoặc bị thay bằng mã mới
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_otp_user ON otp_codes(user_id, purpose, created_at);
 -- Đăng nhập sai liên tiếp theo cặp (email, IP): quá ngưỡng thì khóa tạm, chống dò mật khẩu
 CREATE TABLE IF NOT EXISTS login_attempts (
     key          TEXT PRIMARY KEY,                 -- email|ip
@@ -253,6 +285,24 @@ CREATE TABLE IF NOT EXISTS pickup_counters (                         -- số th�
 );
 ```
 
+Hai cách trả tiền (`payment_method`) và sửa sự kiện đơn tiền mặt (cuối `schema.sql`, chạy mỗi lần Order khởi động):
+
+```sql
+-- 2 cách trả tiền (thêm 16/10/2026): transfer = chuyển khoản trước (VietQR), cash = tiền mặt khi nhận món.
+-- Đơn có từ trước khi có thanh toán trước là trả tại quán -> mặc định 'cash'; đơn chuyển khoản luôn có pay_bank_bin.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(10) DEFAULT 'cash' NOT NULL;
+UPDATE orders SET payment_method='transfer' WHERE payment_method='cash' AND pay_bank_bin IS NOT NULL;
+
+-- Sửa lỗi đơn tiền mặt (17/11/2026): bản cũ ghi sự kiện "order_created_cash", Notification không có tên này nên trả
+-- 422 và chủ quán không được báo. Đổi các sự kiện chưa gửi được sang "order_created" và cho gửi lại ngay. Chạy lại
+-- nhiều lần không sao: sau lần đầu không còn dòng nào khớp điều kiện.
+UPDATE notification_outbox
+   SET payload = REPLACE(payload, 'order_created_cash', 'order_created'),
+       event_key = REPLACE(event_key, ':order_created_cash', ':order_created'),
+       status = 'pending', attempts = 0, last_error = NULL, next_attempt_at = created_at
+ WHERE event_key LIKE '%:order_created_cash' AND status <> 'sent';
+```
+
 Thanh toán trước bằng VietQR (thêm 16/10/2026, `schema.sql` của Order). Tài khoản nhận tiền của chủ quán được chụp vào
 đơn lúc đặt (lấy từ Auth `GET /internal/users/{id}/payout`), nên chủ quán đổi tài khoản không ảnh hưởng đơn cũ:
 
@@ -285,6 +335,24 @@ CREATE TABLE IF NOT EXISTS notifications (
     CONSTRAINT uq_notifications_event_user UNIQUE (event_key, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_noti_user ON notifications(user_id, status, created_at);
+
+-- Nhật ký gửi email qua nhà cung cấp (mã OTP xác nhận email). KHÔNG lưu mã OTP hay nội dung thư.
+--   idempotency_key UNIQUE: Auth gửi lại cùng mã (otp-<otp_id>) không gửi thư lần 2.
+--   provider_message_id UNIQUE: webhook của provider tìm đúng một bản ghi.
+--   sending -> sent (provider nhận) -> delivered / failed (webhook); lỗi gọi provider -> failed (được gửi lại).
+CREATE TABLE IF NOT EXISTS email_logs (
+    id                  UUID PRIMARY KEY,
+    user_id             UUID NOT NULL,
+    to_email            VARCHAR(254) NOT NULL,
+    template            VARCHAR(30)  NOT NULL,
+    status              VARCHAR(10)  NOT NULL CHECK (status IN ('sending','sent','delivered','failed')),
+    provider_message_id VARCHAR(120) UNIQUE,
+    idempotency_key     VARCHAR(120) NOT NULL UNIQUE,
+    last_error          VARCHAR(300),
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_email_logs_user ON email_logs(user_id);
 ```
 
 ### Review – review.db (SQLite)

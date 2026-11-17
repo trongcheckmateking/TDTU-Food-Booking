@@ -1,0 +1,289 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Mock Email Provider (MockMail)",
+    "description": "Dịch vụ gửi email bên thứ ba GIẢ LẬP cho TDTU Food (Unit 20). Dữ liệu chỉ nằm trong bộ nhớ.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Provider còn sống",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/send": {
+      "post": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Gửi một email (bất đồng bộ: trả 202 rồi giao sau)",
+        "operationId": "send_api_send_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "IDEMPOTENCY_KEY_REQUIRED"
+          },
+          "401": {
+            "description": "INVALID_API_KEY"
+          },
+          "409": {
+            "description": "IDEMPOTENCY_CONFLICT / IDEMPOTENCY_IN_PROGRESS"
+          },
+          "422": {
+            "description": "VALIDATION_ERROR"
+          },
+          "429": {
+            "description": "RATE_LIMITED (+ Retry-After)"
+          },
+          "500": {
+            "description": "PROVIDER_ERROR (người nhận fail..., chế độ fail500)"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "Giống ProviderEmailRequest của Unit 20: trường nội dung tên là `content`.",
+                "properties": {
+                  "to": {
+                    "format": "email",
+                    "title": "To",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Subject",
+                    "type": "string"
+                  },
+                  "content": {
+                    "maxLength": 5000,
+                    "minLength": 1,
+                    "title": "Content",
+                    "type": "string"
+                  },
+                  "tag": {
+                    "anyOf": [
+                      {
+                        "maxLength": 50,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Tag"
+                  }
+                },
+                "required": [
+                  "to",
+                  "subject",
+                  "content"
+                ],
+                "title": "SendIn",
+                "type": "object"
+              },
+              "example": {
+                "to": "sv1@student.tdtu.edu.vn",
+                "subject": "TDTU Food - Mã xác nhận email",
+                "content": "Mã xác nhận của bạn là 042917, có hiệu lực 5 phút.",
+                "tag": "otp"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/emails": {
+      "get": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Hộp thư đã gửi (chỉ để demo / test lấy mã OTP), mới nhất trước",
+        "operationId": "list_emails_api_emails_get",
+        "parameters": [
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "20",
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/_control/mode": {
+      "post": {
+        "tags": [
+          "control"
+        ],
+        "summary": "Đổi chế độ giả lập: ok / fail500 / rate429 / slow",
+        "operationId": "set_mode_api__control_mode_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Giá trị EMAIL_API_KEY trong .env"
+      }
+    }
+  }
+}

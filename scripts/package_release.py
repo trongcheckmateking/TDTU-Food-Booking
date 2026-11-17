@@ -1,8 +1,8 @@
 """Đóng gói bản bàn giao: TDTU_FoodBooking_Final.zip (một thư mục gốc TDTU_FoodBooking_Final/).
 
   python scripts/package_release.py [--out ../TDTU_FoodBooking_Final.zip]
-Loại bỏ: .env thật, dữ liệu, log, PID, cache, venv, node_modules, target/ (Java), bin/ (Go), .git, DB/WAL/SHM/H2,
-tệp build (.jar, .exe, .class), tệp hệ điều hành. Người nhận build lại bằng `python manage.py build`.
+Loại bỏ: .env thật, dữ liệu, log, PID, bản sao lưu (backups/), cache, venv, node_modules, target/ (Java), bin/ (Go), .git,
+DB/WAL/SHM/H2, tệp build (.jar, .exe, .class), tệp hệ điều hành. Người nhận build lại bằng `python manage.py build`.
 Quét nội dung: khóa bí mật trong .env hiện tại, private key, JWT thật; dừng nếu phát hiện.
 In SHA-256 của tệp ZIP.
 """
@@ -19,11 +19,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "TDTU_FoodBooking_Final"
 EXCLUDE_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".idea",
-                ".vscode", "data", "logs", ".run", "target", "bin"}
+                ".vscode", "data", "logs", ".run", "target", "bin", "backups"}
 EXCLUDE_FILES = [".env", "*.pyc", "*.pyo", "*.db", "*.db-wal", "*.db-shm", "*.sqlite", "*.log", ".DS_Store",
                  "Thumbs.db", "*.dot", "*.tmp", "*.swp", "*.mv.db", "*.trace.db", "*.jar", "*.exe", "*.class"]
 TEXT_EXT = {".py", ".md", ".txt", ".json", ".js", ".html", ".css", ".sh", ".ps1", ".ini", ".example", ".svg", ".gitignore",
             ".java", ".go", ".php", ".xml", ".properties", ".sql", ".yml", ".mod", ".sum", ".cmd", ""}
+SECRET_KEYS = ("JWT_SECRET", "INTERNAL_KEY", "POSTGRES_PASSWORD", "EMAIL_API_KEY", "EMAIL_WEBHOOK_SECRET")
 JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
 
 
@@ -43,7 +44,7 @@ def secrets_from_env() -> list[str]:
     vals = []
     if env.is_file():
         for line in env.read_text(encoding="utf-8").splitlines():
-            if "=" in line and line.split("=", 1)[0].strip() in ("JWT_SECRET", "INTERNAL_KEY", "POSTGRES_PASSWORD"):
+            if "=" in line and line.split("=", 1)[0].strip() in SECRET_KEYS:
                 v = line.split("=", 1)[1].strip()
                 if len(v) >= 16:
                     vals.append(v)
@@ -64,7 +65,7 @@ def scan(files: list[Path]) -> list[str]:
             problems.append(f"{rel}: chứa private key")
         if JWT_RE.search(text):
             problems.append(f"{rel}: chứa chuỗi giống JWT")
-        if p.name == ".env.example" and re.search(r"^(JWT_SECRET|INTERNAL_KEY|POSTGRES_PASSWORD)=\S", text, re.M):
+        if p.name == ".env.example" and re.search(r"^(" + "|".join(SECRET_KEYS) + r")=\S", text, re.M):
             problems.append(f"{rel}: .env.example không được chứa giá trị khóa")
     return problems
 

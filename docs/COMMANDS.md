@@ -15,7 +15,9 @@ Chạy từ thư mục gốc dự án (thư mục có `manage.py`). Lệnh Docke
 `run.ps1` / `run.sh` (xem dưới). **Không** gõ lệnh Docker sau `run.ps1`: `.\run.ps1 docker compose ...` báo
 `invalid choice: 'docker'`; lệnh Docker gõ thẳng `docker compose ...`.
 
-Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng được trong script / CI). Mọi lệnh tự tạo `.env` nếu chưa có.
+Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng được trong script / CI). Mọi lệnh tự tạo `.env` nếu chưa có;
+`.env` cũ thiếu các biến `OTP_*`, `EMAIL_*`, `MOCK_EMAIL_*` thì lệnh tự thêm vào cuối tệp (khóa bí mật sinh ngẫu nhiên,
+không sửa dòng đang có) và in `Đã bổ sung vào .env: ...`.
 
 ## Tóm tắt
 
@@ -33,6 +35,8 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 | `reset-demo --yes` | Làm sạch trước buổi demo | **XÓA toàn bộ dữ liệu** |
 | `backup` / `restore` | Sao lưu / khôi phục | `restore` **thay dữ liệu** |
 | `test-services`, `test`, `pytest`, `smoke_test.py` | Kiểm thử | `smoke_test.py` thêm dữ liệu thử |
+| `demo_concurrency.py` | Demo xử lý đồng thời trước giảng viên | Thêm vài đơn thử |
+| Đổi chế độ MockMail (`/api/_control/mode`) | Demo nhà cung cấp email lỗi / chậm / giới hạn | Không |
 | `export-openapi` | Cập nhật tài liệu API | Ghi đè `docs/openapi/*.json` |
 
 ---
@@ -51,10 +55,11 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 ### `init-env`
 
 - **Làm gì:** tạo `.env` từ `.env.example`, sinh ngẫu nhiên `JWT_SECRET` (khóa ký token đăng nhập), `INTERNAL_KEY`
-  (khóa để các service gọi nhau), `POSTGRES_PASSWORD`.
+  (khóa để các service gọi nhau), `POSTGRES_PASSWORD`, `EMAIL_API_KEY` (khóa gọi nhà cung cấp email giả lập),
+  `EMAIL_WEBHOOK_SECRET` (khóa ký webhook kết quả giao thư).
 - **In ra:**
   ```
-  Đã tạo ...\.env (JWT_SECRET, INTERNAL_KEY, mật khẩu PostgreSQL ngẫu nhiên).
+  Đã tạo ...\.env (JWT_SECRET, INTERNAL_KEY, khóa email, mật khẩu PostgreSQL ngẫu nhiên).
   ```
   hoặc, khi đã có `.env`:
   ```
@@ -109,7 +114,7 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 
 ### `init-db`
 
-- **Làm gì:** tạo bảng của Auth (`users`, `login_attempts`) nếu chưa có. `setup` và `start` đã tự gọi, thường không cần
+- **Làm gì:** tạo bảng của Auth (`users`, `login_attempts`, `otp_codes`) nếu chưa có. `setup` và `start` đã tự gọi, thường không cần
   chạy tay.
 - **In ra:**
   ```
@@ -124,9 +129,9 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 
 ### `start` (thêm `--timeout <giây>`, mặc định 180)
 
-- **Làm gì:** kiểm tra trước (chưa có tiến trình cũ, cổng 8000–8005 trống, PostgreSQL bật), chạy `init-db`, bật 5 service
-  + giao diện ở chế độ nền, ghi PID vào `.run/pids.json`, ghi log vào `logs/<service>.log`, rồi **chờ** đến khi cả 6 trả
-  `/health` OK.
+- **Làm gì:** kiểm tra trước (chưa có tiến trình cũ, cổng 8000–8005 và 9000 trống, PostgreSQL bật), chạy `init-db`, bật
+  5 service + nhà cung cấp email giả lập (`mock_email`, cổng 9000) + giao diện ở chế độ nền, ghi PID vào
+  `.run/pids.json`, ghi log vào `logs/<service>.log`, rồi **chờ** đến khi cả 7 trả `/health` OK.
 - **In ra khi thành công:**
   ```
   Đã khởi động. Giao diện: http://127.0.0.1:8000
@@ -145,7 +150,7 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 
 ### `status`
 
-- **Làm gì:** gọi `GET /health` của 6 thành phần (health của service có kiểm tra cả kết nối CSDL).
+- **Làm gì:** gọi `GET /health` của 7 thành phần (health của service có kiểm tra cả kết nối CSDL).
 - **In ra** (ví dụ thật khi hệ thống chạy đủ):
   ```
     auth          Python/FastAPI         :8001  OK
@@ -153,6 +158,7 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
     order         Java/Spring Boot       :8003  OK
     notification  Go/Gin + PostgreSQL    :8004  OK
     review        PHP                    :8005  OK
+    mock_email    Python (email giả lập) :9000  OK
     web           Python (giao diện)     :8000  OK
   ```
 - **Đọc kết quả:** `KHÔNG PHẢN HỒI` ở **một** dòng: service đó chết hoặc mất CSDL, xem `logs/<service>.log`.
@@ -163,7 +169,7 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 
 - **Làm gì:** tắt đúng các tiến trình mà `start` đã bật (đọc `.run/pids.json`), không đụng chương trình khác. Dữ liệu
   giữ nguyên.
-- **In ra:** `Đã dừng: auth, restaurant, order, notification, review, web` hoặc
+- **In ra:** `Đã dừng: auth, restaurant, order, notification, review, mock_email, web` hoặc
   `Không có tiến trình nào do manage.py khởi động.`
 - **Lưu ý:** service bật tay (`npm start`, `php -S`...) thì `stop` không tắt.
 
@@ -171,6 +177,7 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 
 - **Làm gì:** nạp dữ liệu demo **qua REST API** của hệ thống đang chạy (đăng ký, tạo quán, duyệt, đặt đơn, đánh giá...),
   nên cũng là một lần chạy thử cả luồng nghiệp vụ. Riêng admin demo ghi thẳng vào CSDL Auth. Chạy lại không tạo trùng.
+  Tài khoản demo được đánh dấu **đã xác nhận email** (đăng nhập luôn, không cần mã OTP).
 - **In ra:** `Đã nạp dữ liệu demo: {...số bản ghi đã tạo...}` và danh sách tài khoản demo.
   Lần chạy lại các con số là `0` (đã có, không tạo trùng).
 - **Lỗi thường gặp:** `Các service chưa chạy: ...` → `start` trước.
@@ -185,9 +192,9 @@ Mã thoát: lệnh thành công trả `0`, có lỗi trả khác `0` (dùng đư
 
 ### `reset-demo --yes`
 
-- **Làm gì:** **XÓA** `auth.db`, `restaurant.db`, `review.db`, `order.mv.db` trong `data/` và bảng `notifications`
-  trong PostgreSQL, rồi `start` + `seed`.
-- **In ra:** `Đã xóa dữ liệu trong ...\data và bảng notifications.`, sau đó kết quả của `start` và `seed`.
+- **Làm gì:** **XÓA** `auth.db`, `restaurant.db`, `review.db`, `order.mv.db` trong `data/` và bảng `notifications`,
+  `email_logs` trong PostgreSQL, rồi `start` + `seed`.
+- **In ra:** `Đã xóa dữ liệu trong ...\data và bảng notifications, email_logs.`, sau đó kết quả của `start` và `seed`.
 - **Bị từ chối khi:** thiếu `--yes` (in cảnh báo `Lệnh này XÓA toàn bộ dữ liệu ...`), hoặc hệ thống đang chạy
   (`Hãy dừng hệ thống ... trước khi reset.`).
 - **Để làm gì:** trước buổi demo, để dữ liệu đúng như kịch bản `docs/DEMO.md`. Ảnh tải lên không bị xóa.
@@ -245,8 +252,8 @@ python -m pytest tests/unit tests/integration tests/e2e   # cần đã build và
 python -m pytest tests/ui                                 # Playwright; cần hệ thống đang chạy + dữ liệu demo
 ```
 
-- **Làm gì:** test tích hợp / E2E tự bật 5 tiến trình thật với dữ liệu tạm và schema PostgreSQL tạm, **không đụng**
-  `data/`.
+- **Làm gì:** test tích hợp / E2E tự bật 5 service + MockMail thật với dữ liệu tạm và schema PostgreSQL tạm, **không
+  đụng** `data/`. `tests/ui` thì dùng hệ thống đang chạy (cần `OTP_ENABLED=true` để chạy 2 test giao diện OTP).
 - **In ra:** dấu `.` cho mỗi test đạt, `F` trượt, `s` bỏ qua; dòng cuối dạng `N passed, M skipped in ...s`.
   Có `failed` thì pytest in chi tiết test trượt (tên test, dòng assert, giá trị thực tế).
 
@@ -257,12 +264,45 @@ python scripts/smoke_test.py
 ```
 
 - **Làm gì:** kiểm tra nhanh hệ thống **đang chạy** bằng một luồng đầy đủ qua API: health 5 service → đăng ký chủ quán và
-  sinh viên → tạo quán → admin duyệt → thêm giỏ → checkout → chuyển khoản / xác nhận tiền → thông báo → đánh giá → token
-  sai bị từ chối. Cần admin demo (`seed`) hoặc đặt `SMOKE_ADMIN_EMAIL`, `SMOKE_ADMIN_PASSWORD`.
+  sinh viên → (bật OTP: đăng nhập trước khi xác nhận bị chặn, đọc mã trong hộp thư MockMail, nhập mã) → tạo quán →
+  admin duyệt → thêm giỏ → checkout → chuyển khoản / xác nhận tiền → đơn tiền mặt (`notification_status` = `sent`) →
+  thông báo → đánh giá → token sai bị từ chối. Không in mã OTP ra màn hình. Cần admin demo (`seed`) hoặc đặt `SMOKE_ADMIN_EMAIL`, `SMOKE_ADMIN_PASSWORD`.
 - **In ra:** mỗi bước một dòng `  ĐẠT  checkout` hoặc `  LỖI  checkout  (chi tiết lỗi từ API)`, cuối cùng
   `KẾT QUẢ: ĐẠT` hoặc `KẾT QUẢ: 2 bước lỗi`.
 - **Để làm gì:** chạy sau `start` / sau khi sửa code để chắc cả luồng còn chạy, trước khi demo. **Tạo thêm** tài khoản
   và quán thử (có hậu tố ngẫu nhiên) vào dữ liệu đang dùng: chạy trước `reset-demo` nếu cần dữ liệu demo sạch.
+
+---
+
+### `scripts/demo_concurrency.py`
+
+```powershell
+python scripts/demo_concurrency.py
+```
+
+- **Làm gì:** trên hệ thống **đang chạy** (tài khoản của `seed`): (1a) 10 luồng checkout cùng `Idempotency-Key`,
+  (1b) 10 luồng checkout không khóa, (2) cùng lúc "Báo hoàn thành" và "Hủy" trên một đơn tiền mặt đã nhận.
+- **In ra:** bảng mã HTTP của từng luồng và số đơn được tạo; dòng cuối `ĐẠT` (mã thoát 0) hoặc `LỖI` (mã thoát 1).
+- **Đọc kết quả:** (1a) đúng 1 × 201, 9 × 200 cùng một mã đơn; (1b) đúng 1 đơn, còn lại 409; (2) đúng 1 thành công,
+  lệnh kia 409. Đổi tài khoản bằng `DEMO_SV_EMAIL`, `DEMO_OWNER_EMAIL`, `DEMO_PASSWORD`.
+
+### Đổi chế độ nhà cung cấp email giả lập (MockMail)
+
+```powershell
+$key = ((Select-String -Path .env -Pattern '^EMAIL_API_KEY=').Line -split '=', 2)[1]     # lấy khóa từ .env, không in ra
+Invoke-RestMethod -Method Post http://127.0.0.1:9000/api/_control/mode -Headers @{"X-API-Key"=$key} -ContentType application/json -Body '{"mode":"fail500"}'
+(Invoke-RestMethod "http://127.0.0.1:9000/api/emails?to=<email>&limit=1" -Headers @{"X-API-Key"=$key}).items[0].content   # thư mới nhất
+```
+
+| Chế độ | MockMail làm gì | Hệ thống phản ứng |
+| --- | --- | --- |
+| `ok` | Nhận thư, ~1 giây sau gọi webhook `delivered` | Đăng ký `otp_sent=true` |
+| `fail500` | Trả 500 | Notification 502 `EMAIL_PROVIDER_ERROR`; đăng ký vẫn thành công, `otp_sent=false` |
+| `rate429` | Trả 429 + `Retry-After` | Notification 503 `EMAIL_PROVIDER_RATE_LIMITED` kèm `Retry-After`; `otp_sent=false` |
+| `slow` | Chờ 10 giây rồi mới trả | Notification hết giờ sau `EMAIL_PROVIDER_TIMEOUT` giây → 503 `EMAIL_PROVIDER_UNAVAILABLE` |
+
+Không cần đổi chế độ: gửi tới địa chỉ bắt đầu bằng `fail` → 500; bắt đầu bằng `bounce` → nhận thư nhưng webhook báo
+`failed` (`mailbox_not_found`). Chế độ lưu trong bộ nhớ: khởi động lại MockMail là về `ok`. **Đổi về `ok`** sau khi demo.
 
 ---
 
@@ -284,6 +324,7 @@ python scripts/smoke_test.py
 | Order | `.\mvnw.cmd -DskipTests package`, `.\mvnw.cmd test` | [`services/order/README.md`](../services/order/README.md) |
 | Notification | `go build -o bin/notification-service.exe .`, `.\bin\notification-service.exe` | [`services/notification/README.md`](../services/notification/README.md) |
 | Review | `php -S 127.0.0.1:8005 public/index.php`, `php tests/run.php` | [`services/review/README.md`](../services/review/README.md) |
+| MockMail (thư mục gốc) | `python -m uvicorn services.mock_email.app:app --port 9000`, `python -m pytest tests/unit/test_mock_email.py` | [`services/mock_email/README.md`](../services/mock_email/README.md) |
 
 Mỗi service tự đọc `.env` ở thư mục gốc. `status` vẫn thấy service bật kiểu này (nó chỉ gọi `/health` theo cổng), nhưng
 `stop` không tắt được: dừng bằng `Ctrl + C` trong cửa sổ đang chạy service.

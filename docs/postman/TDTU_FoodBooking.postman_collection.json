@@ -798,6 +798,500 @@
       ]
     },
     {
+      "name": "OTP. Xác nhận email (Unit 20) + OAuth2 (Unit 18)",
+      "description": "Cần OTP_ENABLED=true và biến môi trường email_api_key (= EMAIL_API_KEY trong .env).",
+      "item": [
+        {
+          "name": "1. Đăng ký sinh viên mới (email ngẫu nhiên)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/register",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "register"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sinh Viên OTP\",\n  \"email\": \"{{otp_email}}\",\n  \"password\": \"{{demo_password}}\",\n  \"role\": \"sinh_vien\",\n  \"accept_terms\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201\", () => pm.response.to.have.status(201));",
+                  "const u = pm.response.json();",
+                  "pm.test(\"chưa xác nhận, đã gửi mã\", () => { pm.expect(u.verification_required).to.be.true;",
+                  "  pm.expect(u.otp_sent).to.be.true; pm.expect(u.email_verified_at).to.be.null; });",
+                  "pm.collectionVariables.set(\"otp_user_id\", u.id);"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"otp_email\", \"sv.otp.\" + pm.variables.replaceIn(\"{{$guid}}\").slice(0, 8) + \"@demo.tdtu.vn\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Đăng nhập khi chưa xác nhận -> 403 EMAIL_NOT_VERIFIED",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/login",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otp_email}}\",\n  \"password\": \"{{demo_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"EMAIL_NOT_VERIFIED\", () => pm.expect(pm.response.json().code).to.eql(\"EMAIL_NOT_VERIFIED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Đọc mã trong hộp thư MockMail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{email_api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mock_email_url}}/api/emails?to={{otp_email}}&limit=1",
+              "host": [
+                "{{mock_email_url}}"
+              ],
+              "path": [
+                "api",
+                "emails"
+              ],
+              "query": [
+                {
+                  "key": "to",
+                  "value": "{{otp_email}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "1"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "const it = pm.response.json().items[0];",
+                  "pm.test(\"có thư mã xác nhận\", () => pm.expect(it).to.be.ok);",
+                  "const m = /\\b(\\d{6})\\b/.exec(it.content);",
+                  "pm.test(\"thư có mã 6 số\", () => pm.expect(m).to.be.ok);",
+                  "const code = m[1];                      // không console.log mã",
+                  "pm.collectionVariables.set(\"otp_code\", code);",
+                  "pm.collectionVariables.set(\"otp_wrong\", code === \"000000\" ? \"111111\" : \"000000\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Nhập sai mã -> 400 OTP_INVALID",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/verify-otp",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "verify-otp"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otp_email}}\",\n  \"code\": \"{{otp_wrong}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"OTP_INVALID + số lần còn lại\", () => { const j = pm.response.json();",
+                  "  pm.expect(j.code).to.eql(\"OTP_INVALID\"); pm.expect(j.remaining_attempts).to.be.a(\"number\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Nhập đúng mã -> 200, nhận token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/verify-otp",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "verify-otp"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otp_email}}\",\n  \"code\": \"{{otp_code}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"đã xác nhận\", () => pm.expect(pm.response.json().user.email_verified_at).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Nhập lại mã -> 409 ALREADY_VERIFIED",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/verify-otp",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "verify-otp"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otp_email}}\",\n  \"code\": \"{{otp_code}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"409 ALREADY_VERIFIED\", () => { pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql(\"ALREADY_VERIFIED\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Gửi lại mã khi đã xác nhận -> 202, không gửi",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/resend-otp",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "resend-otp"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otp_email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"202\", () => pm.response.to.have.status(202));",
+                  "pm.test(\"không gửi thư\", () => pm.expect(pm.response.json().otp_sent).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8. Đăng nhập form OAuth2 (username = email) - Unit 18",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/token",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "token"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{otp_email}}"
+                },
+                {
+                  "key": "password",
+                  "value": "{{demo_password}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"có access_token\", () => pm.expect(pm.response.json().access_token).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9. Không có token -> 401 + WWW-Authenticate: Bearer",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/me",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"WWW-Authenticate\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.eql(\"Bearer\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10. Đăng nhập admin",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/login",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{admin_email}}\",\n  \"password\": \"{{admin_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set(\"token_admin\", pm.response.json().access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11. Admin xem nhật ký email (không có mã OTP)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/admin/email-logs?user_id={{otp_user_id}}",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "email-logs"
+              ],
+              "query": [
+                {
+                  "key": "user_id",
+                  "value": "{{otp_user_id}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().items;",
+                  "pm.test(\"có thư mã xác nhận đã gửi\", () => { pm.expect(items.length).to.be.above(0);",
+                  "  pm.expect([\"sent\", \"delivered\"]).to.include(items[0].status); });",
+                  "pm.test(\"không lộ mã\", () => pm.expect(JSON.stringify(items)).to.not.include(pm.collectionVariables.get(\"otp_code\")));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "1. Auth Service",
       "item": [
         {
@@ -888,6 +1382,87 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"sv.moi@student.tdtu.edu.vn\",\n  \"password\": \"matkhau123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/token – Đăng nhập dạng form OAuth2 (username = email): dùng cho nút Authorize của Swagger (Unit 18)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/token",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "token"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/verify-otp – Nhập mã OTP xác nhận email: đúng thì xác nhận và đăng nhập luôn (trả token như login)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/verify-otp",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "verify-otp"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"sv.moi@student.tdtu.edu.vn\",\n  \"code\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /api/users/resend-otp – Gửi lại mã OTP (mã cũ hết hiệu lực)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{auth_url}}/api/users/resend-otp",
+              "host": [
+                "{{auth_url}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "resend-otp"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"sv.moi@student.tdtu.edu.vn\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2967,6 +3542,110 @@
               "type": "noauth"
             }
           }
+        },
+        {
+          "name": "POST /internal/notifications/email – Auth gửi email mã OTP qua nhà cung cấp (idempotent theo idempotency_key)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notification_url}}/internal/notifications/email",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "internal",
+                "notifications",
+                "email"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"giá trị\",\n  \"template\": \"giá trị\",\n  \"purpose\": \"giá trị\",\n  \"code\": \"giá trị\",\n  \"user_id\": \"giá trị\",\n  \"expires_in_seconds\": \"giá trị\",\n  \"idempotency_key\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /internal/webhooks/email-status – Webhook của nhà cung cấp email: kết quả giao thư (ký HMAC, không dùng X-Internal-Key)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/internal/webhooks/email-status",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "internal",
+                "webhooks",
+                "email-status"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message_id\": \"giá trị\",\n  \"status\": \"cancelled\",\n  \"reason\": \"Lý do mẫu\",\n  \"timestamp\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.request.headers.upsert({key: \"X-Webhook-Signature\", value: \"sha256=\" + CryptoJS.HmacSHA256(pm.request.body.raw, pm.environment.get(\"email_webhook_secret\") || \"\").toString()});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/admin/email-logs – Nhật ký gửi email (admin), không có mã OTP",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_url}}/api/admin/email-logs",
+              "host": [
+                "{{notification_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "email-logs"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -3255,6 +3934,119 @@
           }
         }
       ]
+    },
+    {
+      "name": "6. Mock Email Provider (MockMail)",
+      "item": [
+        {
+          "name": "GET /health – Provider còn sống",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{mock_email_url}}/health",
+              "host": [
+                "{{mock_email_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /api/send – Gửi một email (bất đồng bộ: trả 202 rồi giao sau)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{email_api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mock_email_url}}/api/send",
+              "host": [
+                "{{mock_email_url}}"
+              ],
+              "path": [
+                "api",
+                "send"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"giá trị\",\n  \"subject\": \"giá trị\",\n  \"content\": \"giá trị\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET /api/emails – Hộp thư đã gửi (chỉ để demo / test lấy mã OTP), mới nhất trước",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{email_api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mock_email_url}}/api/emails",
+              "host": [
+                "{{mock_email_url}}"
+              ],
+              "path": [
+                "api",
+                "emails"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "POST /api/_control/mode – Đổi chế độ giả lập: ok / fail500 / rate429 / slow",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{email_api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mock_email_url}}/api/_control/mode",
+              "host": [
+                "{{mock_email_url}}"
+              ],
+              "path": [
+                "api",
+                "_control",
+                "mode"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
     }
   ],
   "variable": [
@@ -3300,6 +4092,22 @@
     },
     {
       "key": "review_id",
+      "value": ""
+    },
+    {
+      "key": "otp_email",
+      "value": ""
+    },
+    {
+      "key": "otp_user_id",
+      "value": ""
+    },
+    {
+      "key": "otp_code",
+      "value": ""
+    },
+    {
+      "key": "otp_wrong",
       "value": ""
     }
   ]

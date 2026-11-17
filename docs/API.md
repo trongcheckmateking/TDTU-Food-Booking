@@ -4,6 +4,9 @@
 dùng **chung một hợp đồng** dưới đây; hợp đồng được kiểm bằng test hộp đen trên tiến trình thật
 (`tests/integration/test_contract.py`). Mỗi service có Swagger UI tại `/docs`, ReDoc tại `/redoc`, đặc tả tại `/openapi.json` (bản xuất sẵn trong `docs/openapi/`).
 Trong Swagger, bấm **Authorize** và dán `access_token` lấy từ `POST /api/users/login` để thử các API cần đăng nhập.
+Swagger của Auth có thêm khung **OAuth2PasswordBearer**: nhập email (ô `username`) + mật khẩu, Swagger tự gọi
+`POST /api/users/token` (Unit 18). Nhà cung cấp email giả lập MockMail (cổng 9000) có Swagger riêng, Authorize bằng
+`X-API-Key` (giá trị `EMAIL_API_KEY` trong `.env`).
 Postman: `docs/postman/` (thư mục "0. Luồng demo" chạy được ngay trên dữ liệu seed).
 
 ## Quy ước chung
@@ -21,7 +24,11 @@ Postman: `docs/postman/` (thư mục "0. Luồng demo" chạy được ngay trê
 | Xác thực | `Authorization: Bearer <token>`; các service hỏi Auth `GET /api/users/me` |
 | API nội bộ | Đường dẫn `/internal/...`, header `X-Internal-Key` (giá trị `INTERNAL_KEY` trong `.env`) |
 | Danh sách | Phân trang `?page=1&page_size=20` (tối đa 100), trả `{items, total, page, page_size}` |
-| Chống trùng checkout | Header `Idempotency-Key: <chuỗi bất kỳ ≤ 100 ký tự>`; gửi lại cùng key trả lại đơn cũ (HTTP 200, header `Idempotent-Replay: true`) |
+| Chống trùng checkout | Header `Idempotency-Key: <chuỗi bất kỳ ≤ 100 ký tự>`; gửi lại cùng key trả lại đơn cũ (HTTP 200, header `Idempotent-Replay: true`), kể cả khi nhiều request cùng key tới đồng thời |
+| Truy vết | Header `X-Request-ID` (8–128 ký tự `A-Za-z0-9._-`): service giữ nguyên, thiếu / sai thì sinh mới (32 hex); luôn trả lại trong response, chuyển tiếp khi gọi service khác, ghi `rid=` vào log |
+| 401 | Mọi phản hồi 401 có header `WWW-Authenticate: Bearer` (OAuth2, Unit 18) |
+| Thông báo của đơn | API trả một đơn có `notification_status`: `none` (chưa có sự kiện) / `pending` / `failed` / `sent` (chủ quán / sinh viên đã được báo) |
+| Xác nhận email | `OTP_ENABLED=true`: tài khoản mới phải nhập mã 6 số gửi qua email (xem mục "Xác nhận email bằng OTP") |
 
 ## Định dạng lỗi
 
@@ -33,16 +40,16 @@ Lỗi dữ liệu vào (422) có thêm `errors: [{"field": "price", "message": "
 
 | HTTP | Ý nghĩa | Mã thường gặp |
 | --- | --- | --- |
-| 400 | Yêu cầu không hợp lệ theo nghiệp vụ | `CART_EMPTY`, `SELF_ACTION`, `WRONG_PASSWORD`, `SAME_PASSWORD` |
-| 401 | Chưa đăng nhập / token sai, hết hạn, bị thu hồi | `UNAUTHORIZED`, `TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `INVALID_CREDENTIALS` |
-| 403 | Không đủ quyền, tài khoản bị khóa, gọi API nội bộ sai khóa | `FORBIDDEN`, `NOT_OWNER`, `ACCOUNT_LOCKED`, `RESTAURANT_LOCKED`, `INTERNAL_ONLY`, `ORDER_NOT_OWNED` |
-| 404 | Không tìm thấy (kể cả quán chưa duyệt/bị khóa với khách) | `RESTAURANT_NOT_FOUND`, `ITEM_NOT_FOUND`, `ORDER_NOT_FOUND` |
-| 409 | Xung đột trạng thái | `EMAIL_EXISTS`, `CART_OTHER_RESTAURANT`, `RESTAURANT_NOT_ACCEPTING`, `ITEMS_UNAVAILABLE`, `ITEM_SOLD_OUT`, `INVALID_TRANSITION`, `STATUS_CHANGED`, `CART_CHANGED`, `REVIEW_EXISTS`, `ORDER_NOT_COMPLETED`, `LAST_ADMIN`, `OWNER_HAS_RESTAURANTS`, `USER_HAS_ACTIVE_ORDERS`, `USER_ERASED` |
+| 400 | Yêu cầu không hợp lệ theo nghiệp vụ | `CART_EMPTY`, `SELF_ACTION`, `WRONG_PASSWORD`, `SAME_PASSWORD`, `OTP_INVALID` (+`remaining_attempts`), `OTP_EXPIRED` |
+| 401 | Chưa đăng nhập / token sai, hết hạn, bị thu hồi; webhook sai chữ ký | `UNAUTHORIZED`, `TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `INVALID_CREDENTIALS`, `INVALID_SIGNATURE` |
+| 403 | Không đủ quyền, tài khoản bị khóa, chưa xác nhận email, gọi API nội bộ sai khóa | `FORBIDDEN`, `NOT_OWNER`, `ACCOUNT_LOCKED`, `EMAIL_NOT_VERIFIED` (+`email`), `RESTAURANT_LOCKED`, `INTERNAL_ONLY`, `ORDER_NOT_OWNED` |
+| 404 | Không tìm thấy (kể cả quán chưa duyệt/bị khóa với khách); tắt OTP | `RESTAURANT_NOT_FOUND`, `ITEM_NOT_FOUND`, `ORDER_NOT_FOUND`, `OTP_DISABLED`, `EMAIL_NOT_FOUND` (webhook) |
+| 409 | Xung đột trạng thái | `EMAIL_EXISTS`, `CART_OTHER_RESTAURANT`, `RESTAURANT_NOT_ACCEPTING`, `ITEMS_UNAVAILABLE`, `ITEM_SOLD_OUT`, `INVALID_TRANSITION`, `STATUS_CHANGED`, `CART_CHANGED`, `REVIEW_EXISTS`, `ORDER_NOT_COMPLETED`, `LAST_ADMIN`, `OWNER_HAS_RESTAURANTS`, `USER_HAS_ACTIVE_ORDERS`, `USER_ERASED`, `ALREADY_VERIFIED`, `EMAIL_IN_PROGRESS` |
 | 413 / 415 | Ảnh quá lớn / không phải ảnh JPEG, PNG, WebP (kiểm tra theo nội dung tệp) | `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` |
 | 422 | Dữ liệu sai kiểu/định dạng, trường lạ | `VALIDATION_ERROR`, `QUANTITY_LIMIT` |
-| 429 | Đăng nhập sai quá nhiều lần (có `Retry-After`); qua gateway: gửi quá nhanh | `TOO_MANY_ATTEMPTS`, `RATE_LIMITED` |
-| 502 | Service khác trả lỗi / sai định dạng | `UPSTREAM_ERROR`, `UPSTREAM_BAD_RESPONSE`, `UPSTREAM_REJECTED` |
-| 503 | Không kết nối được / quá thời gian chờ service khác; qua gateway: service đang dừng | `UPSTREAM_UNAVAILABLE` |
+| 429 | Đăng nhập sai quá nhiều lần (có `Retry-After`); nhập sai mã OTP quá số lần; gửi lại mã quá sớm / quá nhiều (có `retry_after` + `Retry-After`); qua gateway: gửi quá nhanh | `TOO_MANY_ATTEMPTS`, `OTP_LOCKED`, `OTP_RESEND_TOO_SOON`, `OTP_RESEND_LIMIT`, `RATE_LIMITED` |
+| 502 | Service khác / nhà cung cấp email trả lỗi, sai định dạng, từ chối khóa API | `UPSTREAM_ERROR`, `UPSTREAM_BAD_RESPONSE`, `UPSTREAM_REJECTED`, `EMAIL_PROVIDER_ERROR`, `EMAIL_PROVIDER_BAD_RESPONSE`, `EMAIL_PROVIDER_AUTH` |
+| 503 | Không kết nối được / quá thời gian chờ service khác hoặc nhà cung cấp email; nhà cung cấp giới hạn tần suất (có `Retry-After`); qua gateway: service đang dừng | `UPSTREAM_UNAVAILABLE`, `EMAIL_PROVIDER_UNAVAILABLE`, `EMAIL_PROVIDER_RATE_LIMITED`, `EMAIL_NOT_CONFIGURED` |
 
 ## Ví dụ luồng chính (curl)
 
@@ -84,6 +91,41 @@ sinh viên đánh giá `POST :8005/api/reviews {"order_id":"…","rating":5,"com
 admin duyệt quán `PATCH :8002/api/admin/restaurants/{id}/status {"status":"active"}`;
 admin khóa tài khoản `PATCH :8001/api/users/{id}/status {"status":"locked"}`.
 
+Đơn **tiền mặt**: thêm `"payment_method": "cash"` vào body checkout → đơn tới quán ngay (không có bước chuyển khoản),
+chủ quán được báo `order_created` liền; xem `notification_status` của đơn để biết đã báo xong chưa.
+
+## Xác nhận email bằng OTP
+
+```bash
+# 1. Đăng ký (OTP_ENABLED=true) -> 201, tài khoản chưa xác nhận, mã 6 số gửi qua email
+curl -s -X POST http://127.0.0.1:8001/api/users/register -H 'Content-Type: application/json' \
+  -d '{"name":"Trần Thị Bình","email":"sv9@demo.tdtu.vn","password":"Demo@123","role":"sinh_vien","accept_terms":true}'
+#   {"id": "…", "email": "sv9@demo.tdtu.vn", "email_verified_at": null, …,
+#    "verification_required": true, "otp_sent": true, "resend_after": 60}
+
+# 2. Đăng nhập trước khi xác nhận -> 403 {"code": "EMAIL_NOT_VERIFIED", "email": "sv9@demo.tdtu.vn", …}
+
+# 3. Nhập mã -> 200 {access_token, token_type, expires_in, user} như đăng nhập
+curl -s -X POST http://127.0.0.1:8001/api/users/verify-otp -H 'Content-Type: application/json' \
+  -d '{"email":"sv9@demo.tdtu.vn","code":"123456"}'
+
+# 4. Gửi lại mã (luôn 202, không lộ email nào đã đăng ký) -> {"detail", "otp_sent", "resend_after"}
+curl -s -X POST http://127.0.0.1:8001/api/users/resend-otp -H 'Content-Type: application/json' -d '{"email":"sv9@demo.tdtu.vn"}'
+```
+
+| Tình huống | Kết quả |
+| --- | --- |
+| Sai mã | 400 `OTP_INVALID`, `remaining_attempts` giảm dần; hết lượt → 429 `OTP_LOCKED` (phải gửi lại mã mới) |
+| Mã quá `OTP_TTL_SECONDS` / đã bị thay bằng mã mới | 400 `OTP_EXPIRED` |
+| Đã xác nhận rồi / tài khoản admin | 409 `ALREADY_VERIFIED` |
+| Gửi lại trong `OTP_RESEND_SECONDS` giây / quá `OTP_RESEND_PER_HOUR` mã mỗi giờ | 429 `OTP_RESEND_TOO_SOON` / `OTP_RESEND_LIMIT`, kèm `retry_after` và header `Retry-After` |
+| Notification hoặc nhà cung cấp email lỗi lúc đăng ký | Vẫn 201, `otp_sent: false`; người dùng gửi lại mã sau |
+| `OTP_ENABLED=false` | `verify-otp`, `resend-otp` trả 404 `OTP_DISABLED`; đăng ký trả `verification_required: false` và đăng nhập luôn |
+
+Auth chỉ lưu HMAC-SHA256 của mã, không ghi mã vào log. Notification ghi `email_logs` (không có mã) và gọi nhà cung cấp
+với `Idempotency-Key = otp-<otp_id>`; nhà cung cấp báo kết quả giao thư qua webhook
+`POST :8004/internal/webhooks/email-status` có header `X-Webhook-Signature: sha256=<HMAC-SHA256(EMAIL_WEBHOOK_SECRET, thân request thô)>`.
+
 ## Mã nhận món 3 chữ số
 
 Mỗi đơn có `pickup_code` gồm 3 chữ số (`"047"`): số thứ tự đơn trong ngày (giờ Việt Nam) của từng quán, 001 → 999 rồi
@@ -122,6 +164,9 @@ chuỗi VietQR chuẩn EMVCo (tag 38 Napas `A000000727` + `QRIBFTTA`, tiền t�
 | Order | Restaurant | `POST /internal/quote` | Kiểm tra quán nhận đơn, món thuộc quán, còn bán, giá hiện tại |
 | Order | Auth | `GET /internal/users/{id}/payout` | Lấy tài khoản nhận tiền của chủ quán để chụp vào đơn (404 `PAYOUT_MISSING`) |
 | Order | Notification | `POST /internal/notifications/events` | Gửi sự kiện đơn (qua outbox, gửi lại khi lỗi, chống trùng) |
+| Auth | Notification | `POST /internal/notifications/email` | Gửi email mã OTP (sau khi commit; lỗi thì `otp_sent=false`) |
+| Notification | MockMail (nhà cung cấp email) | `POST /api/send` (`X-API-Key`, `Idempotency-Key`) | Gửi thư; nhận `message_id` |
+| MockMail | Notification | `POST /internal/webhooks/email-status` (chữ ký HMAC) | Báo `delivered` / `failed`; thử lại sau 2, 4, 8 giây khi Notification lỗi |
 | Review | Order | `GET /internal/orders/{id}` | Xác minh đơn của sinh viên và đã completed |
 | Auth | Order, Restaurant, Review, Notification | `POST /internal/users/{id}/erase` | Admin xử lý yêu cầu xóa dữ liệu cá nhân: ẩn danh / xóa dữ liệu của người đó ở từng service (Order đi trước, từ chối khi còn đơn đang xử lý) |
 | `scripts/backup.py` | Order | `GET /internal/backup` | Bản sao lưu nóng DB H2 (`BACKUP TO`) |
@@ -141,6 +186,9 @@ gateway trả 404 cho `/svc/*/internal/...`, `/docs`, `/redoc`, `/openapi.json` 
 | GET | `/health` | Công khai | Readiness: service và DB sẵn sàng |
 | POST | `/api/users/register` | Công khai | Đăng ký tài khoản sinh viên hoặc chủ quán |
 | POST | `/api/users/login` | Công khai | Đăng nhập, nhận access_token. Sai 5 lần trong 15 phút (cùng email + IP) thì khóa tạm 15 phút (429) |
+| POST | `/api/users/token` | Công khai | Đăng nhập dạng form OAuth2 (username = email): dùng cho nút Authorize của Swagger (Unit 18) |
+| POST | `/api/users/verify-otp` | Công khai | Nhập mã OTP xác nhận email: đúng thì xác nhận và đăng nhập luôn (trả token như login) |
+| POST | `/api/users/resend-otp` | Công khai | Gửi lại mã OTP (mã cũ hết hiệu lực) |
 | GET | `/api/users/me` | Đã đăng nhập | Hồ sơ người đang đăng nhập (các service khác gọi API này để xác thực) |
 | PATCH | `/api/users/me` | Đã đăng nhập | Cập nhật họ tên, số điện thoại |
 | POST | `/api/users/logout` | Đã đăng nhập | Đăng xuất: thu hồi mọi token hiện có của tài khoản |
@@ -226,6 +274,9 @@ gateway trả 404 cho `/svc/*/internal/...`, `/docs`, `/redoc`, `/openapi.json` 
 | GET | `/api/admin/notifications` | Admin | Mọi thông báo (admin) |
 | DELETE | `/api/admin/notifications/{nid}` | Admin | Xóa 1 thông báo (admin) |
 | POST | `/internal/users/{uid}/erase` | Nội bộ (X-Internal-Key) | Xóa dữ liệu cá nhân của một tài khoản (Auth điều phối) |
+| POST | `/internal/notifications/email` | Nội bộ (X-Internal-Key) | Auth gửi email mã OTP qua nhà cung cấp (idempotent theo idempotency_key) |
+| POST | `/internal/webhooks/email-status` | Nhà cung cấp email (chữ ký HMAC X-Webhook-Signature) | Webhook của nhà cung cấp email: kết quả giao thư (ký HMAC, không dùng X-Internal-Key) |
+| GET | `/api/admin/email-logs` | Admin | Nhật ký gửi email (admin), không có mã OTP |
 
 ### Review Service – cổng 8005
 
@@ -241,3 +292,12 @@ gateway trả 404 cho `/svc/*/internal/...`, `/docs`, `/redoc`, `/openapi.json` 
 | GET | `/api/admin/reviews` | Admin | Mọi đánh giá (admin), lọc theo trạng thái, số sao tối đa |
 | PATCH | `/api/admin/reviews/{review_id}/status` | Admin | Ẩn / hiện lại đánh giá vi phạm (admin). Không xóa cứng để đơn không bị đánh giá lại. |
 | POST | `/internal/users/{user_id}/erase` | Nội bộ (X-Internal-Key) | Xóa dữ liệu cá nhân của một tài khoản (Auth điều phối) |
+
+### Mock Email Provider (MockMail) – cổng 9000
+
+| Method | Đường dẫn | Quyền | Mô tả |
+| --- | --- | --- | --- |
+| GET | `/health` | Công khai | Provider còn sống |
+| POST | `/api/send` | Khóa API của nhà cung cấp (X-API-Key) | Gửi một email (bất đồng bộ: trả 202 rồi giao sau) |
+| GET | `/api/emails` | Khóa API của nhà cung cấp (X-API-Key) | Hộp thư đã gửi (chỉ để demo / test lấy mã OTP), mới nhất trước |
+| POST | `/api/_control/mode` | Khóa API của nhà cung cấp (X-API-Key) | Đổi chế độ giả lập: ok / fail500 / rate429 / slow |

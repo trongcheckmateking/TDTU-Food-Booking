@@ -7,14 +7,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "API.md"
 MARK = "<!-- BẢNG ENDPOINT SINH TỰ ĐỘNG - chạy scripts/gen_api_md.py để cập nhật -->"
-PORTS = {"auth": 8001, "restaurant": 8002, "order": 8003, "notification": 8004, "review": 8005}
+PORTS = {"auth": 8001, "restaurant": 8002, "order": 8003, "notification": 8004, "review": 8005, "mock_email": 9000}
 
 
 PUB, OPT, ANY, SV, CQ, AD, INT = ("Công khai", "Công khai (token tùy chọn)", "Đã đăng nhập", "Sinh viên",
                                   "Chủ quán", "Admin", "Nội bộ (X-Internal-Key)")
+APIKEY = "Khóa API của nhà cung cấp (X-API-Key)"
 ROLES = {
     "GET /": PUB, "GET /health": PUB,
     "POST /api/users/register": PUB, "POST /api/users/login": PUB, "GET /api/users/me": ANY,
+    "POST /api/users/token": PUB, "POST /api/users/verify-otp": PUB, "POST /api/users/resend-otp": PUB,
     "PATCH /api/users/me": ANY, "POST /api/users/logout": ANY, "GET /api/users": AD, "GET /api/users/{user_id}": AD,
     "PATCH /api/users/{user_id}/role": AD, "PATCH /api/users/{user_id}/status": AD,
     "PUT /api/users/me/avatar": ANY, "DELETE /api/users/me/avatar": ANY, "GET /avatars/{name}": PUB,
@@ -40,6 +42,9 @@ ROLES = {
     "POST /internal/notifications/events": INT, "GET /api/notifications/me": ANY,
     "PATCH /api/notifications/me/read-all": ANY, "PATCH /api/notifications/{nid}/read": ANY + " (người nhận)",
     "GET /api/admin/notifications": AD, "DELETE /api/admin/notifications/{nid}": AD,
+    "POST /internal/notifications/email": INT, "GET /api/admin/email-logs": AD,
+    "POST /internal/webhooks/email-status": "Nhà cung cấp email (chữ ký HMAC X-Webhook-Signature)",
+    "POST /api/send": APIKEY, "GET /api/emails": APIKEY, "POST /api/_control/mode": APIKEY,
     "POST /api/reviews": SV + " (đơn completed của mình)", "GET /api/reviews/me": ANY, "GET /api/reviews/summary": PUB,
     "GET /api/reviews/restaurant/{rid}": PUB, "GET /api/reviews/restaurant/{rid}/summary": PUB,
     "GET /api/admin/reviews": AD, "PATCH /api/admin/reviews/{review_id}/status": AD,

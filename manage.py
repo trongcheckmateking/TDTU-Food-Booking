@@ -13,7 +13,7 @@
   python manage.py status          Kiểm tra health của từng service
   python manage.py reset-demo --yes  XÓA dữ liệu (SQLite, H2, bảng PostgreSQL) rồi start + seed lại
   python manage.py test-services   Chạy test riêng của từng service (node --test, go test, php, JUnit)
-  python manage.py export-openapi  Xuất OpenAPI của 5 service vào docs/openapi/
+  python manage.py export-openapi  Xuất OpenAPI của 5 service + MockMail vào docs/openapi/
   python manage.py backup          Sao lưu 5 cơ sở dữ liệu + ảnh vào backups/ (--list, --verify TỆP, --loop)
   python manage.py restore TỆP --yes  Khôi phục từ bản sao lưu (dừng hệ thống trước; dữ liệu cũ được giữ lại)
 """
@@ -44,7 +44,7 @@ RUN_DIR = Path(os.environ.get("TDTU_RUN_DIR", ROOT / ".run"))     # nơi lưu PI
 LOG_DIR = Path(os.environ.get("TDTU_LOG_DIR", ROOT / "logs"))
 PID_FILE = RUN_DIR / "pids.json"
 SERVICES = ["auth", "restaurant", "order", "notification", "review"]
-# Dịch vụ phụ chạy cùng hệ thống nhưng KHÔNG thuộc 5 service (không export-openapi / seed / backup)
+# Dịch vụ phụ chạy cùng hệ thống nhưng KHÔNG thuộc 5 service (không seed / backup; export-openapi có xuất tài liệu)
 EXTRA = ["mock_email"]
 IS_WIN = os.name == "nt"
 SVC = ROOT / "services"
@@ -513,7 +513,7 @@ def cmd_reset_demo(args) -> None:
             (d / f"{f}{suffix}").unlink(missing_ok=True)
     if NOTI_BIN.is_file():
         run([str(NOTI_BIN), "--reset-db"], SVC / "notification")
-    print(f"Đã xóa dữ liệu trong {d} và bảng notifications.")
+    print(f"Đã xóa dữ liệu trong {d} và bảng notifications, email_logs.")
     cmd_start(argparse.Namespace(host="127.0.0.1", timeout=180))
     cmd_seed()
 
@@ -553,7 +553,10 @@ def cmd_export_openapi(_) -> None:
                "notification": SVC / "notification" / "openapi.json", "review": SVC / "review" / "openapi.json"}
     for s, src in sources.items():
         shutil.copyfile(src, out / f"{s}.json")
-    for s in SERVICES:
+    from services.mock_email.app import app as mock_app      # nhà cung cấp email giả lập (Unit 20)
+    (out / "mock_email.json").write_text(json.dumps(mock_app.openapi(), ensure_ascii=False, indent=2),
+                                        encoding="utf-8")
+    for s in [*SERVICES, *EXTRA]:
         print("  ", out / f"{s}.json")
 
 

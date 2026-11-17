@@ -1,9 +1,9 @@
 # Đối chiếu yêu cầu
 
-**Chưa có đề giữa kỳ gốc.** Phạm vi dưới đây lấy từ: kế hoạch phân công TV1–TV5 [KH], tài liệu bàn giao [BG],
-sơ đồ Use Case/DFD/ERD [SĐ], ảnh đặc điểm FastAPI [Ả], mã nguồn hai bộ code [M], và prompt hoàn thiện [PR].
-Ảnh chỉ mô tả đặc điểm FastAPI, không chứa danh sách chức năng hay thang điểm. Tài liệu này **không** khẳng định
-đáp ứng đủ rubric của giảng viên. Khi có đề gốc, cần đối chiếu lại bảng này.
+Phạm vi lấy từ: tiêu chí đồ án cuối kỳ môn SOA (CS504070) và giáo trình https://fastapi-docs.duonghuuphuc.com
+(Unit 1–22, Phụ lục A–E) [CK], kế hoạch phân công TV1–TV5 [KH], tài liệu bàn giao [BG], sơ đồ Use Case/DFD/ERD [SĐ],
+ảnh đặc điểm FastAPI [Ả], mã nguồn hai bộ code [M], và prompt hoàn thiện [PR]. Mục cuối "Đối chiếu tiêu chí cuối kỳ"
+ánh xạ từng mức điểm / mức trần sang mã nguồn và tên test thật.
 
 Tên test: `I:` = `tests/integration` (5 tiến trình thật, 5 ngôn ngữ), `U:` = `tests/unit`, `E:` = `tests/e2e`,
 `UI:` = `tests/ui`, `S:` = test riêng của service (`node --test`, `go test`, `php tests/run.php`, JUnit).
@@ -16,7 +16,10 @@ Tên test: `I:` = `tests/integration` (5 tiến trình thật, 5 ngôn ngữ), `
 3. "Xóa tài khoản" = khóa (vô hiệu hóa) để giữ lịch sử; không có xóa cứng.
 4. Đơn đã đặt thì sinh viên không tự hủy được; admin hủy được (đơn chờ xác nhận hoặc đang làm) nhưng không xác nhận / hoàn thành thay chủ quán; chủ quán xác nhận / hoàn thành / từ chối / hủy (nhóm quyết định 16/10/2026; trước đó sinh viên được hủy đơn đang chờ).
 5. Giờ mở cửa chỉ để hiển thị; việc nhận đơn do trạng thái quán quyết định (tránh hỏng demo theo giờ máy).
-6. Không tích hợp thanh toán, shipper, email/SMS (không có trong nguồn).
+6. Thanh toán: chuyển khoản trước bằng mã VietQR vào thẳng tài khoản chủ quán (app không giữ tiền, chủ quán tự xác nhận
+   đã nhận tiền) hoặc tiền mặt khi nhận món; không tích hợp cổng thanh toán, không có shipper.
+7. Email: chỉ gửi mã OTP xác nhận email qua nhà cung cấp email **giả lập** (MockMail, `services/mock_email`, Unit 20);
+   không gửi email thật, không có SMS. Tài khoản seed được đánh dấu đã xác nhận sẵn.
 
 ## Bảng đối chiếu
 
@@ -70,3 +73,30 @@ Tên test: `I:` = `tests/integration` (5 tiến trình thật, 5 ngôn ngữ), `
 | KH | Use Case, DFD mức 1/2, ERD từng service + tổng | `docs/diagrams/` | Sinh lại bằng `gen_diagrams.py` | Hoàn thành |
 | KH | Báo cáo từng phần / báo cáo chung theo khung TDTU | – | – | Ngoài phạm vi mã: `PROJECT_SUMMARY.md` cung cấp nội dung, nhóm tự trình bày theo khung báo cáo |
 | BG, nhóm | Mỗi service một ngôn ngữ khác nhau | Python, Node.js, Java, Go, PHP (xem `ARCHITECTURE.md`) | I: toàn bộ chạy trên 5 runtime thật; E: `test_status_and_docs` kiểm tra 5 runtime | Hoàn thành |
+| CK Unit 20 | Xác nhận email bằng mã OTP 6 số khi đăng ký; chưa xác nhận thì không đăng nhập được; gửi lại mã; khóa mã khi nhập sai | Auth (Python): `otp_codes` (chỉ lưu HMAC), `users.email_verified_at`, `POST /api/users/register` (`verification_required`, `otp_sent`, `resend_after`), `/verify-otp`, `/resend-otp`, login 403 `EMAIL_NOT_VERIFIED`; web: form `#fOtp` (`landing.js`) | I: `test_otp_register_sends_code_and_blocks_login`, `test_otp_verify_returns_token_only_once`, `test_otp_wrong_attempts_then_locked`, `test_otp_expired`, `test_otp_resend_too_soon_then_new_code_replaces_old`, `test_otp_resend_hourly_limit_counts_registration_code`, `test_otp_resend_unknown_or_verified_is_202_without_sending`, `test_otp_admin_always_verified_and_disabled_endpoints`, `test_erase_deletes_otp_codes`; E: `register()` xác nhận mã thật; UI: `test_signup_otp_wrong_code_resend_and_mobile_layout`, `test_login_unverified_account_shows_otp_form`, `finish_signup` trong `test_full_flow_three_roles` | Hoàn thành |
+| CK Unit 20 | Dịch vụ bên thứ ba: gửi email qua nhà cung cấp (API key, Idempotency-Key, giới hạn tần suất, lỗi 500/429), webhook kết quả giao thư có ký HMAC | `services/mock_email` (MockMail, cổng 9000); Notification (Go): `POST /internal/notifications/email`, `POST /internal/webhooks/email-status`, `GET /api/admin/email-logs`, bảng `email_logs` | U: `test_mock_email.py` (16 test); S: `TestParseEmailRequest`, `TestCallProviderMapping`, `TestValidSignature`, `TestIntegrationEmailIdempotencyAndRetry`, `TestIntegrationWebhook`, `TestIntegrationEmailEraseAndNoCodeInLog` (go test); I: `test_otp_provider_500_and_timeout`; E: `test_otp_email_delivered_via_signed_webhook` | Hoàn thành |
+| CK Unit 22 | Notification sập thì đăng ký / đặt đơn vẫn thành công, gửi lại sau | Đăng ký: `otp_sent=false`, bấm Gửi lại mã; đơn: outbox + `notification_status` (`none` / `pending` / `sent` / `failed`) trên API trả một đơn | I: `test_otp_register_ok_when_notification_down`, `test_cash_order_created_while_notification_down_then_retry`, `test_notifications_flow_and_outbox_retry_without_duplicates`; S: `notificationStatusFailedKhiNotificationSapRoiSentSauKhiGuiLai` (JUnit); E: `test_full_business_flow_restart_and_notification_outage` | Hoàn thành |
+| CK Unit 22 | Đơn tiền mặt tới quán ngay, chủ quán được báo có đơn mới (sửa lỗi sự kiện `order_created_cash` bị Notification từ chối) | Order (Java): sự kiện `order_created`; `schema.sql` sửa các dòng outbox cũ | S: `donTienMatBaoChuQuanNgayVaThuTienKhiHoanThanh`, `schemaSqlSuaSuKienTienMatCuChuaGuiDuoc` (JUnit); I: `test_cash_order_notifies_owner_immediately`; `scripts/smoke_test.py` bước đơn tiền mặt | Hoàn thành |
+| CK Unit 22 | Số lượng âm / không hợp lệ bị từ chối | `POST /api/cart/items`, `PATCH /api/cart/items/{id}` | I: `test_negative_quantity_rejected`, `test_cart_validation_and_availability` | Hoàn thành |
+| CK Unit 18 | JWT theo chuẩn OAuth2: đăng nhập dạng form, nút Authorize của Swagger, 401 có `WWW-Authenticate: Bearer` | `POST /api/users/token` (`OAuth2PasswordRequestForm`), `OAuth2PasswordBearer(tokenUrl=...)`, `common/errors.py` | I: `test_token_endpoint_form_login`, `test_401_has_www_authenticate_header` | Hoàn thành |
+| CK logging / tracing | X-Request-ID xuyên 5 service + mock: nhận / sinh, trả lại, chuyển tiếp, log `rid=` | `common/request_id.py`, `src/requestId.js`, `WebConfig.java` (MDC), `requestid.go`, `public/index.php` | I: `test_request_id_echoed_or_generated` (5 service), `test_request_id_traced_across_services`; U: `test_request_id.py`; S: `xRequestIdTraLaiSinhMoiVaChuyenTiep` (JUnit), `TestRequestIDEchoGenerateAndForward`, `TestAccessLogHasRid` (go), test X-Request-ID của node và php | Hoàn thành |
+| CK đồng thời | Demo đồng thời chạy được trước giảng viên | `scripts/demo_concurrency.py`: 10 luồng cùng Idempotency-Key, 10 luồng không khóa, 2 lệnh đổi trạng thái cùng lúc | S: `muoiLuongCungIdempotencyKeyDungMot201ConLaiCungDon`, `checkoutDongThoiChiTaoMotDon` (JUnit); I: `test_otp_parallel_wrong_codes_counted_exactly`, `test_concurrent_status_updates`; chạy script in ĐẠT | Hoàn thành |
+| CK sơ đồ | Sơ đồ kiến trúc microservices và luồng OTP | `docs/diagrams/arch/ARCH_0_microservices`, `ARCH_1_otp_flow` (`gen_diagrams.py`) | Sinh lại bằng `python docs/diagrams/gen_diagrams.py` | Hoàn thành |
+
+## Đối chiếu tiêu chí cuối kỳ
+
+| Tiêu chí / mức trần | Trạng thái | Mã nguồn | Bằng chứng (test / tài liệu) |
+| --- | --- | --- | --- |
+| Không có OTP → tối đa 7.0 | **Đã gỡ** | Auth `services/auth/app.py` (`register`, `verify_otp`, `resend_otp`, `new_otp`, `send_otp`), Notification `email.go`, `services/mock_email/app.py`, web `landing.js` | 15 test OTP / Unit 18 trong `tests/integration/test_auth.py`; `TestIntegrationEmail*`; `test_otp_email_delivered_via_signed_webhook`; 2 test UI OTP |
+| Không có sơ đồ kiến trúc microservices → tối đa 8.0 | **Đã gỡ** | `docs/diagrams/gen_diagrams.py` (`build_arch`, `build_otp_flow`) | `docs/diagrams/arch/ARCH_0_microservices.png/.svg`, `ARCH_1_otp_flow.png/.svg`; chèn trong `ARCHITECTURE.md` |
+| Không xử lý transaction / concurrency → tối đa 7.5 | Có | `BEGIN IMMEDIATE` (`common/db.py`, Restaurant `db.js`), `TransactionTemplate` + `SELECT ... FOR UPDATE` + UPDATE có điều kiện (Order), `OnConflict` + UPDATE có điều kiện (Notification), `UNIQUE(order_id)` (Review), đếm lần thử OTP trước khi so mã | `test_last_admin_never_lost_under_concurrency`, `test_login_lockout_holds_under_parallel_guesses`, `test_otp_parallel_wrong_codes_counted_exactly`, `checkoutDongThoiChiTaoMotDon`, `muoiLuongCungIdempotencyKeyDungMot201ConLaiCungDon`, `test_concurrent_status_updates`, `test_concurrent_reviews_same_order`; `scripts/demo_concurrency.py` |
+| Chỉ là monolith → tối đa 6.5 | Không phải monolith | 5 service, 5 ngôn ngữ, 5 CSDL riêng, gọi nhau qua REST; không service nào đọc DB của service khác | `ARCH_0_microservices`, `DATABASE.md`; `test_status_and_docs` (5 runtime), `test_contract.py` |
+| 9–10: tài liệu API | Có | Swagger `/docs`, ReDoc, `openapi.json` cả 5 service; `docs/API.md`; Postman `docs/postman/` (có thư mục OTP) | `test_docs_openapi_health_cors_404`, `test_status_and_docs` |
+| 9–10: kiểm thử tự động | Có | pytest unit / integration / e2e / ui, JUnit, go test, node --test, php | Số liệu thật trong `TEST_REPORT.md` |
+| 9–10: Docker Compose | Có | `docker-compose.yml` (5 service + web + PostgreSQL + gateway + mock-email + backup), Dockerfile từng service | `docs/DOCKER.md`, `docs/DEPLOY.md`; kết quả chạy trong `TEST_REPORT.md` |
+| 9–10: idempotency | Có | `Idempotency-Key` checkout (Order), `event_key` outbox + `UNIQUE(event_key,user_id)` (Notification), `idempotency_key` email (Notification ↔ MockMail), webhook lặp | `test_checkout_idempotency_and_double_click`, `muoiLuongCungIdempotencyKey...`, `TestIntegrationEmailIdempotencyAndRetry`, `test_replay_same_key_and_body_returns_cached_result` |
+| 9–10: API Gateway | Có | `deploy/gateway` (Nginx): HTTPS, `/svc/<service>/`, rate limit (đăng nhập, OTP, tải ảnh), chặn `/internal` và `/docs` | `docs/DEPLOY.md`; chạy thử Docker (`TEST_REPORT.md`) |
+| 9–10: logging / tracing | Có | X-Request-ID ở 5 service + mock, log `METHOD PATH STATUS <ms>ms rid=` | `test_request_id_traced_across_services` (cùng rid trong log order, auth, restaurant, notification) |
+| 9–10: kiểm thử E2E | Có | `tests/e2e` chạy bằng `manage.py start`; `tests/ui` (Playwright) | `test_full_business_flow_restart_and_notification_outage`, `test_otp_email_delivered_via_signed_webhook`, `test_full_flow_three_roles` |
+| 9–10: kiểm thử đồng thời | Có | như dòng transaction / concurrency | các test đồng thời ở trên + `demo_concurrency.py` |
+| Giáo trình dùng FastAPI | **Cần hỏi giảng viên** | Chỉ Auth (và MockMail, giao diện) dùng FastAPI; 4 service còn lại theo yêu cầu "mỗi service một ngôn ngữ" của nhóm | Nhóm cần xác nhận với giảng viên việc 4 service không dùng FastAPI có được chấp nhận |
