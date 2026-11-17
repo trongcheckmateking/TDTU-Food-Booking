@@ -642,6 +642,71 @@ class OrderFlowTest {
         assertTrue(EVENTS.contains(oid + ":order_confirmed") && EVENTS.contains(oid + ":order_completed"));
     }
 
+    @Test
+    void muoiLuongCungIdempotencyKeyDungMot201ConLaiCungDon() throws Exception {
+        call("DELETE", "/api/cart", "sv2", null);
+        addToCart("sv2", ITEM2, 1);
+        String key = UUID.randomUUID().toString();
+        ExecutorService pool = Executors.newFixedThreadPool(10);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        List<Future<Res>> fs = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            fs.add(pool.submit(() -> {
+                go.await();
+                return call("POST", "/api/orders/checkout", "sv2", "{\"delivery_address\":\"KTX B305\"}", "Idempotency-Key", key);
+            }));
+        }
+        go.countDown();
+        int created = 0;
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (Future<Res> f : fs) {
+            Res r = f.get();
+            assertTrue(r.status() == 201 || (r.status() == 200
+                    && "true".equals(r.raw().headers().firstValue("Idempotent-Replay").orElse(""))), r.status() + " " + r.body());
+            created += r.status() == 201 ? 1 : 0;
+            ids.add(r.body().get("id").asText());
+        }
+        pool.shutdown();
+        assertEquals(1, created);
+        assertEquals(1, ids.size());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM orders WHERE idempotency_key=?", Integer.class, key));
+    }
+
+    @Test
+    void notificationStatusFailedKhiNotificationSapRoiSentSauKhiGuiLai() throws Exception {
+        // đơn chuyển khoản chưa trả tiền: chưa có sự kiện nào -> none
+        call("DELETE", "/api/cart", "sv", null);
+        addToCart("sv", ITEM2, 1);
+        String unpaid = checkout("sv", null);
+        assertEquals("none", call("GET", "/api/orders/" + unpaid, "sv", null).body().get("notification_status").asText());
+
+        // Notification sập ngay lúc tạo đơn tiền mặt: đơn vẫn 201, notification_status = failed
+        addToCart("sv", ITEM2, 1);
+        notificationMode = "down";
+        Res r = call("POST", "/api/orders/checkout", "sv", "{\"delivery_address\":\"KTX B305\",\"payment_method\":\"cash\"}");
+        notificationMode = "ok";
+        assertEquals(201, r.status(), String.valueOf(r.body()));
+        String oid = r.body().get("id").asText();
+        assertEquals("failed", r.body().get("notification_status").asText());
+        assertEquals("failed", call("GET", "/api/orders/" + oid, "owner", null).body().get("notification_status").asText());
+        // danh sách đơn không có trường này (chỉ API trả một đơn)
+        JsonNode list = call("GET", "/api/orders/me?page_size=100", "sv", null).body().get("items");
+        assertTrue(list.size() > 0 && !list.get(0).has("notification_status"));
+
+        jdbc.update("UPDATE notification_outbox SET status='pending' WHERE order_id=?", oid);
+        assertEquals("pending", call("GET", "/api/orders/" + oid, "sv", null).body().get("notification_status").asText());
+        jdbc.update("UPDATE notification_outbox SET status='failed' WHERE order_id=?", oid);
+
+        // admin gửi lại -> sent; PATCH trạng thái cũng trả notification_status
+        assertTrue(call("POST", "/api/admin/outbox/retry", "admin", null).body().get("sent").asInt() >= 1);
+        assertTrue(EVENTS.contains(oid + ":order_created"));
+        assertEquals("sent", call("GET", "/api/orders/" + oid, "sv", null).body().get("notification_status").asText());
+        Res c = call("PATCH", "/api/orders/" + oid + "/status", "owner", "{\"status\":\"confirmed\"}");
+        assertEquals("sent", c.body().get("notification_status").asText());
+        // API nội bộ giữ nguyên dạng cũ (không có notification_status)
+        assertFalse(call("GET", "/internal/orders/" + oid, null, null, "X-Internal-Key", KEY).body().has("notification_status"));
+    }
+
     @Autowired
     javax.sql.DataSource dataSource;
 

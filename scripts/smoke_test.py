@@ -2,12 +2,14 @@
 
 Chạy sau `python manage.py start` (cần tài khoản admin; mặc định dùng admin demo của lệnh seed):
     python scripts/smoke_test.py
-Biến môi trường: SMOKE_ADMIN_EMAIL, SMOKE_ADMIN_PASSWORD, *_URL như .env. Thoát mã 1 nếu có bước lỗi.
-Tạo dữ liệu mới (tài khoản/quán có hậu tố ngẫu nhiên), không xóa dữ liệu sẵn có.
+Biến môi trường: SMOKE_ADMIN_EMAIL, SMOKE_ADMIN_PASSWORD, *_URL, MOCK_EMAIL_URL, EMAIL_API_KEY như .env.
+Thoát mã 1 nếu có bước lỗi. Tạo dữ liệu mới (tài khoản/quán có hậu tố ngẫu nhiên), không xóa dữ liệu sẵn có.
+Bật OTP: đăng ký -> đăng nhập bị chặn (EMAIL_NOT_VERIFIED) -> đọc mã ở hộp thư MockMail -> xác nhận -> đăng nhập.
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -22,6 +24,7 @@ except (AttributeError, ValueError):
 from common import config  # noqa: E402
 
 U = {n.lower(): config.service_url(n) for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW")}
+MOCK = config.get("MOCK_EMAIL_URL", "http://127.0.0.1:9000").rstrip("/")
 failures = 0
 
 
@@ -38,6 +41,29 @@ def login(email, pw):
     return {"Authorization": "Bearer " + r.json()["access_token"]}
 
 
+def read_otp(email):
+    """Mã mới nhất trong hộp thư của nhà cung cấp email giả lập (không in mã ra màn hình)."""
+    r = requests.get(MOCK + "/api/emails", headers={"X-API-Key": config.get("EMAIL_API_KEY", "")},
+                     params={"to": email}, timeout=5)
+    items = r.json().get("items", []) if r.status_code == 200 else []
+    m = re.search(r"\b(\d{6})\b", items[0]["content"]) if items else None
+    return m.group(1) if m else None
+
+
+def verify_email(email, pw, reg):
+    """Bật OTP: đăng nhập trước khi xác nhận bị chặn; nhập mã trong email -> nhận token. Tắt OTP: đăng nhập luôn."""
+    if not reg.get("verification_required"):
+        return login(email, pw)
+    r = requests.post(U["auth"] + "/api/users/login", json={"email": email, "password": pw}, timeout=10)
+    step("chưa xác nhận email thì không đăng nhập được", r.status_code == 403 and r.json().get("code") == "EMAIL_NOT_VERIFIED", r.text)
+    step("mã OTP đã gửi qua email", reg.get("otp_sent") is True, str(reg.get("otp_sent")))
+    code = read_otp(email)
+    step("đọc được mã OTP trong hộp thư MockMail", code is not None)
+    r = requests.post(U["auth"] + "/api/users/verify-otp", json={"email": email, "code": code or "000000"}, timeout=10)
+    step("xác nhận email bằng mã OTP", r.status_code == 200 and "access_token" in r.json(), r.text)
+    return {"Authorization": "Bearer " + r.json()["access_token"]} if r.status_code == 200 else login(email, pw)
+
+
 def main():
     tag = uuid.uuid4().hex[:6]
     for name, url in U.items():
@@ -51,7 +77,7 @@ def main():
             body.update(bank_bin="970436", bank_account="0071000123456", bank_holder="SMOKE TEST DEMO")
         r = requests.post(U["auth"] + "/api/users/register", timeout=10, json=body)
         step(f"đăng ký {role}", r.status_code == 201, r.text)
-        users[key] = login(email, "smoke12345")
+        users[key] = verify_email(email, "smoke12345", r.json())
     r = requests.post(U["restaurant"] + "/api/restaurants", headers=users["owner"], timeout=10,
                       json={"name": f"Quán Smoke {tag}", "address": "19 Nguyễn Hữu Thọ, Q7"})
     step("chủ quán tạo quán (pending)", r.status_code == 201 and r.json()["status"] == "pending", r.text)
@@ -83,6 +109,17 @@ def main():
     step("đánh giá đơn hoàn thành", r.status_code == 201, r.text)
     s = requests.get(U["review"] + f"/api/reviews/restaurant/{rid}/summary", timeout=10).json()
     step("điểm trung bình 5.0", s["average"] == 5.0, str(s))
+    # đơn tiền mặt: tới quán ngay, chủ quán được báo "có đơn mới" (sự kiện order_created)
+    requests.post(U["order"] + "/api/cart/items", headers=users["sv"], timeout=10,
+                  json={"restaurant_id": rid, "item_id": item, "quantity": 1})
+    r = requests.post(U["order"] + "/api/orders/checkout", headers=users["sv"], timeout=15,
+                      json={"delivery_address": "KTX TDTU", "payment_method": "cash"})
+    cash = r.json() if r.status_code == 201 else {}
+    step("đặt đơn tiền mặt", r.status_code == 201 and cash.get("payment", {}).get("status") == "cash", r.text)
+    step("đơn tiền mặt đã báo chủ quán (notification_status = sent)", cash.get("notification_status") == "sent", str(cash.get("notification_status")))
+    n = requests.get(U["notification"] + "/api/notifications/me", headers=users["owner"], timeout=10).json()
+    step("chủ quán nhận thông báo đơn tiền mặt", any(x["order_id"] == cash.get("id") and x["type"] == "order_created"
+                                                   for x in n.get("items", [])), str(n.get("total")))
     step("token sai bị từ chối", requests.get(U["order"] + "/api/orders/me", headers={"Authorization": "Bearer x"}, timeout=10).status_code == 401)
     print("KẾT QUẢ:", "ĐẠT" if not failures else f"{failures} bước lỗi")
     sys.exit(1 if failures else 0)

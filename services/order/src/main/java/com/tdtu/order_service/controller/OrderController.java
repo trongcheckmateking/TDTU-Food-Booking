@@ -43,9 +43,9 @@ public class OrderController {
         String k = key == null || key.isBlank() ? null : key.strip();
         OrderService.CheckoutResult r = orders.checkout(u, k, address, note, method == null ? Payment.TRANSFER : method);
         if (r.replay()) {
-            return ResponseEntity.ok().header("Idempotent-Replay", "true").body(OrderService.toJson(r.order(), false));
+            return ResponseEntity.ok().header("Idempotent-Replay", "true").body(orders.view(r.order()));
         }
-        return ResponseEntity.status(201).body(OrderService.toJson(r.order(), false));
+        return ResponseEntity.status(201).body(orders.view(r.order()));
     }
 
     @GetMapping("/me")
@@ -98,20 +98,20 @@ public class OrderController {
         AuthUser u = auth.require(req);
         Order o = orders.load(Json.uuidParam(oid, "oid"));
         if (!OrderService.canView(u, o)) throw new ApiError(403, "FORBIDDEN", "Bạn không có quyền xem đơn này");
-        return OrderService.toJson(o, false);
+        return orders.view(o);
     }
 
     // ---------------------------------------------------------------- thanh toán trước
     /** Sinh viên: đã quét mã VietQR và chuyển khoản xong. */
     @PostMapping("/{oid}/payment/claim")
     public Map<String, Object> claimPayment(HttpServletRequest req, @PathVariable String oid) {
-        return OrderService.toJson(orders.claimPayment(auth.require(req, "sinh_vien"), Json.uuidParam(oid, "oid")), false);
+        return orders.view(orders.claimPayment(auth.require(req, "sinh_vien"), Json.uuidParam(oid, "oid")));
     }
 
     /** Chủ quán: tiền đã vào tài khoản -> đơn đặt thành công, bắt đầu làm món. */
     @PostMapping("/{oid}/payment/confirm")
     public Map<String, Object> confirmPayment(HttpServletRequest req, @PathVariable String oid) {
-        return OrderService.toJson(orders.confirmPayment(auth.require(req, "chu_quan"), Json.uuidParam(oid, "oid")), false);
+        return orders.view(orders.confirmPayment(auth.require(req, "chu_quan"), Json.uuidParam(oid, "oid")));
     }
 
     /** Chủ quán: không thấy tiền -> hủy đơn. */
@@ -122,13 +122,13 @@ public class OrderController {
         Json.Body b = Json.body(raw == null || raw.isBlank() ? "{}" : raw, Set.of("reason"));
         String reason = b.optText("reason", 300);
         b.done();
-        return OrderService.toJson(orders.rejectPayment(u, Json.uuidParam(oid, "oid"), reason), false);
+        return orders.view(orders.rejectPayment(u, Json.uuidParam(oid, "oid"), reason));
     }
 
     /** Chủ quán: đã chuyển trả tiền cho sinh viên (đơn đã thanh toán bị hủy). */
     @PostMapping("/{oid}/payment/refunded")
     public Map<String, Object> refunded(HttpServletRequest req, @PathVariable String oid) {
-        return OrderService.toJson(orders.markRefunded(auth.require(req, "chu_quan"), Json.uuidParam(oid, "oid")), false);
+        return orders.view(orders.markRefunded(auth.require(req, "chu_quan"), Json.uuidParam(oid, "oid")));
     }
 
     /** Chủ quán: xác nhận / hoàn thành / hủy (đơn đã thanh toán); sinh viên: bỏ đơn chưa thanh toán; admin: chỉ hủy. */
@@ -141,6 +141,6 @@ public class OrderController {
         String st = b.oneOf("status", STATUSES, true);
         String reason = b.optText("reason", 300);
         b.done();
-        return OrderService.toJson(orders.updateStatus(u, id, OrderStatus.from(st), reason), false);
+        return orders.view(orders.updateStatus(u, id, OrderStatus.from(st), reason));
     }
 }

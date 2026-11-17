@@ -364,6 +364,7 @@ def test_cash_order_notifies_owner_immediately(world):
     assert r.status_code == 201, r.text
     o = r.json()
     assert (o["status"], o["payment"]["method"], o["payment"]["status"]) == ("pending", "cash", "cash")
+    assert o["notification_status"] == "sent"
     msgs = owner_notis_of(world, o["id"])
     assert len(msgs) == 1 and msgs[0]["type"] == "order_created" and "đơn mới" in msgs[0]["message"], msgs
     sent = s.order.get("/api/admin/outbox", headers=world.admin, params={"status": "sent"}).json()
@@ -384,6 +385,7 @@ def test_cash_order_created_while_notification_down_then_retry(world):
     r = cash_checkout(s, world.sv)
     assert r.status_code == 201, r.text
     oid = r.json()["id"]
+    assert r.json()["notification_status"] == "failed"
     failed = [f for f in s.order.get("/api/admin/outbox", headers=world.admin, params={"status": "failed"}).json()
               if f["order_id"] == oid]
     assert [f["event_key"] for f in failed] == [f"{oid}:order_created"] and failed[0]["last_error"], failed
@@ -393,6 +395,7 @@ def test_cash_order_created_while_notification_down_then_retry(world):
     assert r.status_code == 200 and r.json()["sent"] >= 1, r.text
     msgs = owner_notis_of(world, oid)
     assert len(msgs) == 1 and "đơn mới" in msgs[0]["message"], msgs
+    assert s.order.get(f"/api/orders/{oid}", headers=world.sv).json()["notification_status"] == "sent"
     s.order.post("/api/admin/outbox/retry", headers=world.admin)          # gửi lại lần nữa không nhân đôi
     assert len(owner_notis_of(world, oid)) == 1
 
