@@ -96,9 +96,25 @@ func corsOrigins() map[string]bool {
 }
 
 func httpTimeout() time.Duration {
-	f, err := strconv.ParseFloat(getenv("HTTP_TIMEOUT", "5"), 64)
+	return secondsEnv("HTTP_TIMEOUT", 5)
+}
+
+func secondsEnv(name string, def float64) time.Duration {
+	f, err := strconv.ParseFloat(getenv(name, ""), 64)
 	if err != nil || f <= 0 {
-		f = 5
+		f = def
 	}
 	return time.Duration(f * float64(time.Second))
 }
+
+// ---------------------------------------------------------------- nhà cung cấp email (Unit 20)
+// Trống EMAIL_PROVIDER_URL hoặc EMAIL_API_KEY -> gửi email trả 503 EMAIL_NOT_CONFIGURED (không đoán địa chỉ mặc định).
+func emailProviderURL() string { return strings.TrimRight(getenv("EMAIL_PROVIDER_URL", ""), "/") }
+
+func emailAPIKey() string { return getenv("EMAIL_API_KEY", "") }
+
+// webhookSecret: khóa kiểm tra chữ ký webhook của provider; trống -> mọi webhook bị từ chối (401).
+func webhookSecret() string { return getenv("EMAIL_WEBHOOK_SECRET", "") }
+
+// providerTimeout: thời gian chờ provider, mặc định 3 giây (phải nhỏ hơn HTTP_TIMEOUT của Auth).
+func providerTimeout() time.Duration { return secondsEnv("EMAIL_PROVIDER_TIMEOUT", 3) }

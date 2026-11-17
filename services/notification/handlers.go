@@ -347,20 +347,30 @@ func (s *Server) adminList(c *gin.Context) {
 	c.JSON(200, res)
 }
 
-// eraseUser xóa mọi thông báo của một tài khoản (Auth điều phối khi admin xử lý yêu cầu xóa dữ liệu cá nhân).
-// Gọi lại nhiều lần cho cùng kết quả.
+// eraseUser xóa mọi thông báo và nhật ký email (có địa chỉ email) của một tài khoản (Auth điều phối khi admin xử
+// lý yêu cầu xóa dữ liệu cá nhân). Gọi lại nhiều lần cho cùng kết quả.
 func (s *Server) eraseUser(c *gin.Context) {
 	id, err := uuidValue(c.Param("uid"), "user_id")
 	if err != nil {
 		writeErr(c, err)
 		return
 	}
-	res := s.db.Where("user_id = ?", id).Delete(&Notification{})
-	if res.Error != nil {
-		writeErr(c, res.Error)
+	var notis, emails int64
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Where("user_id = ?", id).Delete(&Notification{})
+		if res.Error != nil {
+			return res.Error
+		}
+		notis = res.RowsAffected
+		res = tx.Where("user_id = ?", id).Delete(&EmailLog{})
+		emails = res.RowsAffected
+		return res.Error
+	})
+	if err != nil {
+		writeErr(c, err)
 		return
 	}
-	c.JSON(200, gin.H{"user_id": id, "notifications_deleted": res.RowsAffected})
+	c.JSON(200, gin.H{"user_id": id, "notifications_deleted": notis, "emails_deleted": emails})
 }
 
 func (s *Server) adminDelete(c *gin.Context) {

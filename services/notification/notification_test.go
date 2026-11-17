@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const testKey = "test-internal-key-yyyyyyyyyyyyyyyy"
@@ -118,7 +120,15 @@ func TestCallServiceErrorMapping(t *testing.T) {
 }
 
 // ---------------------------------------------------------------- tích hợp với PostgreSQL
-func setupIntegration(t *testing.T) (*httptest.Server, func(method, path, token string, body any) (int, map[string]any)) {
+type callFn = func(method, path, token string, body any) (int, map[string]any)
+
+func setupIntegration(t *testing.T) (*httptest.Server, callFn) {
+	srv, call, _ := setupIntegrationDB(t)
+	return srv, call
+}
+
+// setupIntegrationDB: như setupIntegration, trả thêm kết nối DB (schema riêng của test) để sửa / kiểm tra dữ liệu.
+func setupIntegrationDB(t *testing.T) (*httptest.Server, callFn, *gorm.DB) {
 	dsn := os.Getenv("NOTIFICATION_TEST_DB_URL")
 	if dsn == "" {
 		t.Skip("bỏ qua: chưa đặt NOTIFICATION_TEST_DB_URL (PostgreSQL dùng cho test)")
@@ -181,7 +191,7 @@ func setupIntegration(t *testing.T) (*httptest.Server, func(method, path, token 
 		json.NewDecoder(resp.Body).Decode(&out)
 		return resp.StatusCode, out
 	}
-	return srv, call
+	return srv, call, db
 }
 
 func TestIntegrationEventsAndReading(t *testing.T) {
