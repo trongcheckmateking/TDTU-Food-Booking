@@ -246,8 +246,9 @@ public class OrderService {
                 jdbc.update("DELETE FROM cart_items WHERE cart_id=?", locked.id());     // chỉ xóa giỏ khi thành công
                 jdbc.update("UPDATE carts SET restaurant_id=NULL, updated_at=? WHERE id=?", ts, locked.id());
                 // chuyển khoản: chưa báo quán, đơn chỉ "đặt thành công" khi quán xác nhận đã nhận tiền (confirmPayment);
-                // tiền mặt: đơn tới quán ngay
-                return cash ? outbox.enqueue(load(oid), "order_created_cash", "sinh_vien") : null;
+                // tiền mặt: đơn tới quán ngay -> sự kiện order_created (Notification chỉ nhận đúng các tên sự kiện
+                // trong parseEvent của handlers.go; tên khác bị trả 422 và chủ quán không bao giờ được báo)
+                return cash ? outbox.enqueue(load(oid), "order_created", "sinh_vien") : null;
             });
         } catch (DuplicateKeyException e) {
             throw new ApiError(409, "DUPLICATE_REQUEST", "Yêu cầu đặt hàng này đã được xử lý");

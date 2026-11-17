@@ -341,3 +341,69 @@ def test_owner_without_payout_account_cannot_take_orders(world):
     assert r.status_code == 200 and r.json()["bank_name"] == "MB Bank", r.text
     o = checkout(s, world.sv).json()
     assert (o["payment"]["bank_bin"], o["payment"]["holder"]) == ("970422", "LE VAN DOI")
+
+
+# ------------------------------------------------------------------ tiền mặt khi nhận món (Unit 22)
+def cash_checkout(s, h, key=None):
+    hh = dict(h)
+    if key:
+        hh["Idempotency-Key"] = key
+    return s.order.post("/api/orders/checkout", headers=hh,
+                        json={"delivery_address": "KTX TDTU B305", "payment_method": "cash"})
+
+
+def owner_notis_of(world, oid):
+    return [n for n in notis(world, world.owner) if n["order_id"] == oid]
+
+
+def test_cash_order_notifies_owner_immediately(world):
+    """Đơn tiền mặt tới quán ngay: Notification THẬT nhận sự kiện order_created, chủ quán thấy "có đơn mới"."""
+    s = world.s
+    add(s, world.sv, world.rid, world.item1, 2)
+    r = cash_checkout(s, world.sv)
+    assert r.status_code == 201, r.text
+    o = r.json()
+    assert (o["status"], o["payment"]["method"], o["payment"]["status"]) == ("pending", "cash", "cash")
+    msgs = owner_notis_of(world, o["id"])
+    assert len(msgs) == 1 and msgs[0]["type"] == "order_created" and "đơn mới" in msgs[0]["message"], msgs
+    sent = s.order.get("/api/admin/outbox", headers=world.admin, params={"status": "sent"}).json()
+    assert [f["event_key"] for f in sent if f["order_id"] == o["id"]] == [f"{o['id']}:order_created"]
+    # quán xác nhận (chưa thu tiền) rồi báo hoàn thành = đã thu tiền mặt
+    url = f"/api/orders/{o['id']}/status"
+    assert s.order.patch(url, headers=world.owner, json={"status": "confirmed"}).json()["payment"]["status"] == "cash"
+    done = s.order.patch(url, headers=world.owner, json={"status": "completed"}).json()
+    assert (done["status"], done["payment"]["status"]) == ("completed", "paid")
+    assert any("hoàn thành" in n["message"] for n in notis(world, world.sv))
+
+
+def test_cash_order_created_while_notification_down_then_retry(world):
+    """Unit 22: Notification sập ngay lúc tạo đơn -> đơn vẫn được tạo; gửi lại outbox -> chủ quán được báo đúng 1 lần."""
+    s = world.s
+    add(s, world.sv, world.rid, world.item1)
+    s.fault("notification", "down")
+    r = cash_checkout(s, world.sv)
+    assert r.status_code == 201, r.text
+    oid = r.json()["id"]
+    failed = [f for f in s.order.get("/api/admin/outbox", headers=world.admin, params={"status": "failed"}).json()
+              if f["order_id"] == oid]
+    assert [f["event_key"] for f in failed] == [f"{oid}:order_created"] and failed[0]["last_error"], failed
+    s.fault("notification", None)
+    assert owner_notis_of(world, oid) == []
+    r = s.order.post("/api/admin/outbox/retry", headers=world.admin)
+    assert r.status_code == 200 and r.json()["sent"] >= 1, r.text
+    msgs = owner_notis_of(world, oid)
+    assert len(msgs) == 1 and "đơn mới" in msgs[0]["message"], msgs
+    s.order.post("/api/admin/outbox/retry", headers=world.admin)          # gửi lại lần nữa không nhân đôi
+    assert len(owner_notis_of(world, oid)) == 1
+
+
+def test_negative_quantity_rejected(world):
+    """Bài tập Unit 22: số lượng âm bị từ chối 422, giỏ không đổi."""
+    s = world.s
+    r = add(s, world.sv, world.rid, world.item1, -1)
+    assert r.status_code == 422 and r.json()["code"] == "VALIDATION_ERROR", r.text
+    assert s.order.get("/api/cart", headers=world.sv).json()["item_count"] == 0
+    add(s, world.sv, world.rid, world.item1, 1)
+    r = s.order.patch(f"/api/cart/items/{world.item1}", headers=world.sv, json={"quantity": -1})
+    assert r.status_code == 422, r.text
+    assert s.order.get("/api/cart", headers=world.sv).json()["total_price"] == 35000
