@@ -96,6 +96,7 @@ python manage.py seed           # bỏ qua nếu không cần dữ liệu demo
 ```
 
 Không dùng dữ liệu demo: bỏ bước `seed`, tạo admin thật bằng `python manage.py create-admin`.
+Mỗi lệnh làm gì, in ra gì và đọc kết quả thế nào: [`docs/COMMANDS.md`](docs/COMMANDS.md).
 Chạy riêng một service (khi phát triển): xem lệnh trong `docs/ARCHITECTURE.md` mục "Vận hành"; mỗi service tự đọc `.env` ở thư mục gốc.
 
 ## Địa chỉ sau khi start
@@ -281,6 +282,7 @@ Postman: import `docs/postman/*.json`, chạy thư mục "0. Luồng demo". Kế
 | `docs/REQUIREMENTS.md` | Đối chiếu yêu cầu → chức năng → API/UI → test |
 | `docs/SOURCE_REVIEW.md`, `docs/MERGE_DECISIONS.md` | Đánh giá các bộ nguồn và quyết định hợp nhất theo từng thành viên |
 | `docs/TEST_REPORT.md` | Môi trường, lệnh, kết quả kiểm thử thực tế |
+| `docs/COMMANDS.md` | Bảng tra mọi lệnh: làm gì, in ra gì, đọc kết quả thế nào, khi nào dùng |
 | `docs/DOCKER.md` | Hướng dẫn nhóm chạy cả hệ thống bằng Docker Desktop trên máy cá nhân |
 | `docs/DEPLOY.md` | Chạy thử bằng Docker: gateway HTTPS, sao lưu / khôi phục, cập nhật, yêu cầu xóa dữ liệu |
 | `docs/PROJECT_SUMMARY.md` | Tóm tắt phục vụ thuyết trình |
