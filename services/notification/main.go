@@ -31,10 +31,11 @@ func corsMiddleware(allowed map[string]bool) gin.HandlerFunc {
 		preflight := c.Request.Method == http.MethodOptions && c.GetHeader("Access-Control-Request-Method") != ""
 		if origin != "" && allowed[origin] {
 			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Expose-Headers", ridHeader)
 			c.Header("Vary", "Origin")
 			if preflight {
 				c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
+				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Request-ID")
 				c.Header("Access-Control-Max-Age", "600")
 				c.AbortWithStatus(200)
 				return
@@ -67,8 +68,9 @@ func docsPage(kind string) string {
 func newRouter(db *gorm.DB, internalKey string, origins map[string]bool, quiet bool) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	r.Use(requestID()) // TRƯỚC logger: mọi dòng log truy cập có rid
 	if !quiet {
-		r.Use(gin.LoggerWithConfig(gin.LoggerConfig{SkipPaths: []string{"/health"}}))
+		r.Use(gin.LoggerWithConfig(gin.LoggerConfig{SkipPaths: []string{"/health"}, Formatter: accessLog}))
 	}
 	r.Use(recovery(), corsMiddleware(origins))
 	s := &Server{db: db}

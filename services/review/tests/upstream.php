@@ -13,6 +13,8 @@ if (preg_match('#^/mode/(\w+)$#', $path, $m)) {
     exit('{}');
 }
 $mode = is_file($modeFile) ? trim((string) file_get_contents($modeFile)) : 'ok';
+// ghi lại X-Request-ID nhận được để test kiểm tra Review có chuyển tiếp mã truy vết không
+file_put_contents(sys_get_temp_dir() . '/review-upstream-rid-' . getenv('UPSTREAM_TAG'), $_SERVER['HTTP_X_REQUEST_ID'] ?? '');
 header('Content-Type: application/json');
 if ($mode === '500') {
     http_response_code(500);

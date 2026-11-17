@@ -197,12 +197,31 @@ try {
     }
     [$s] = req('GET', "$B/api/reviews/me", 'sv1');
     check('upstream hồi phục', $s === 200);
+
+    // X-Request-ID: trả lại rid hợp lệ, sinh 32 hex khi thiếu / sai, chuyển tiếp sang Auth, có trên response lỗi
+    $ridOf = fn(string $h) => preg_match('/^x-request-id: (\S+)/m', $h, $mm) ? $mm[1] : null;
+    [$s, , $h] = req('GET', "$B/api/reviews/me", 'sv1', null, null, ['X-Request-ID: demo-rid-0001']);
+    $forwarded = (string) @file_get_contents(sys_get_temp_dir() . '/review-upstream-rid-' . $tag);
+    check('X-Request-ID trả lại và chuyển tiếp sang Auth', $s === 200 && $ridOf($h) === 'demo-rid-0001'
+        && $forwarded === 'demo-rid-0001', [$ridOf($h), $forwarded]);
+    foreach ([null, 'ngan', 'co dau cach!!', str_repeat('x', 129)] as $bad) {
+        [$s, , $h] = req('GET', "$B/khong-co", null, null, null, $bad === null ? [] : ["X-Request-ID: $bad"]);
+        check('X-Request-ID sinh mới khi ' . var_export($bad, true), $s === 404
+            && preg_match('/^[0-9a-f]{32}$/D', (string) $ridOf($h)) === 1, $ridOf($h));
+    }
+    [$s, , $h] = req('OPTIONS', "$B/health", null, null, null, ['Origin: http://127.0.0.1:8000',
+        'Access-Control-Request-Method: GET']);
+    check('preflight có X-Request-ID và Expose-Headers', $s === 200 && preg_match('/^[0-9a-f]{32}$/D', (string) $ridOf($h)) === 1
+        && str_contains($h, 'access-control-allow-headers: authorization, content-type, idempotency-key, x-request-id'), $h);
+    [, , $h] = req('GET', "$B/health", null, null, null, ['Origin: http://127.0.0.1:8000']);
+    check('CORS cho trình duyệt đọc X-Request-ID', str_contains($h, 'access-control-expose-headers: x-request-id'), $h);
 } finally {
     foreach ([$rev, $up] as [$proc]) {
         proc_terminate($proc);
         proc_close($proc);
     }
     @unlink(sys_get_temp_dir() . '/review-upstream-mode-' . $tag);
+    @unlink(sys_get_temp_dir() . '/review-upstream-rid-' . $tag);
     array_map('unlink', glob("$tmp/*") ?: []);
     @rmdir($tmp);
 }

@@ -8,6 +8,19 @@ declare(strict_types=1);
  */
 require dirname(__DIR__) . '/src/bootstrap.php';
 
+// X-Request-ID cho mọi response (kể cả lỗi / preflight CORS); log truy cập lúc kết thúc request (không ghi /health)
+define('REQUEST_ID', acceptRequestId($_SERVER['HTTP_X_REQUEST_ID'] ?? null));
+header('X-Request-ID: ' . REQUEST_ID);
+$batDau = microtime(true);
+register_shutdown_function(static function () use ($batDau): void {
+    $duong = (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+    if ($duong === '/health' || strtoupper((string) env('LOG_LEVEL', 'INFO')) === 'WARNING') {
+        return;
+    }
+    error_log(sprintf('%s %s %d %dms rid=%s', $_SERVER['REQUEST_METHOD'] ?? 'GET', $duong, http_response_code() ?: 200,
+        (int) round((microtime(true) - $batDau) * 1000), REQUEST_ID));
+});
+
 function docsPage(string $kind): string
 {
     if ($kind === 'redoc') {
@@ -133,7 +146,7 @@ try {
 } catch (ApiError $loi) {
     errorResponse($loi);
 } catch (Throwable $loi) {
-    error_log('[review] Lỗi không mong đợi: ' . get_class($loi) . ': ' . $loi->getMessage());
+    error_log('[review] Lỗi không mong đợi: ' . get_class($loi) . ': ' . $loi->getMessage() . ' rid=' . REQUEST_ID);
     if ($loi instanceof RuntimeException && str_starts_with($loi->getMessage(), 'Thiếu cấu hình')) {
         jsonResponse(500, ['detail' => $loi->getMessage(), 'code' => 'CONFIG_ERROR']);
     }

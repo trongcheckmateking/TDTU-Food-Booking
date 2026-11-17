@@ -10,6 +10,7 @@ const config = require('./config');
 const db = require('./db');
 const { ApiError, validationError, notFoundHandler, errorHandler } = require('./errors');
 const { requireUser, optionalUser, requireInternal } = require('./auth');
+const requestId = require('./requestId');
 const V = require('./validate');
 
 const { T, req: R, opt: O } = V;
@@ -236,11 +237,12 @@ function createApp() {
   app.set('etag', false);
   const allowed = new Set(config.corsOrigins());
 
-  app.use((req, res, next) => {                      // log ngắn, không ghi token/body
+  app.use(requestId.middleware);                     // X-Request-ID: TRƯỚC middleware log để mọi dòng log có rid
+  app.use((req, res, next) => {                      // log ngắn, không ghi token/body, không ghi /health
     const t0 = Date.now();
     res.on('finish', () => {
-      if (config.get('LOG_LEVEL', 'INFO') !== 'WARNING') {
-        console.log(`${new Date().toISOString()} ${req.method} ${req.path} ${res.statusCode} ${Date.now() - t0}ms`);
+      if (req.path !== '/health' && config.get('LOG_LEVEL', 'INFO') !== 'WARNING') {
+        console.log(`${new Date().toISOString()} ${req.method} ${req.path} ${res.statusCode} ${Date.now() - t0}ms rid=${req.rid}`);
       }
     });
     next();
@@ -249,10 +251,11 @@ function createApp() {
     const origin = req.get('origin');
     if (origin && allowed.has(origin)) {
       res.set('Access-Control-Allow-Origin', origin);
+      res.set('Access-Control-Expose-Headers', requestId.HEADER);
       res.set('Vary', 'Origin');
       if (req.method === 'OPTIONS' && req.get('access-control-request-method')) {
         res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Idempotency-Key');
+        res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Idempotency-Key, X-Request-ID');
         res.set('Access-Control-Max-Age', '600');
         return res.status(200).end();
       }

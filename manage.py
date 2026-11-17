@@ -351,8 +351,9 @@ def service_command(name: str, host: str, port: int) -> tuple[list[str], Path, d
     """Lệnh chạy từng service bằng runtime của nó (cwd = thư mục service)."""
     extra = {"BIND_HOST": host}
     if name == "auth":
+        # log truy cập do middleware của common/app.py ghi (có rid=...); tắt access log của uvicorn để không ghi trùng
         return ([sys.executable, "-m", "uvicorn", "services.auth.app:app", "--host", host, "--port", str(port),
-                 "--app-dir", str(ROOT), "--log-level", "info"], ROOT, extra)
+                 "--app-dir", str(ROOT), "--log-level", "info", "--no-access-log"], ROOT, extra)
     if name == "web":
         return ([sys.executable, "-m", "uvicorn", "web.server:app", "--host", host, "--port", str(port),
                  "--app-dir", str(ROOT), "--log-level", "warning"], ROOT, extra)

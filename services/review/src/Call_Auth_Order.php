@@ -14,6 +14,10 @@ final class Call_Auth_Order
                                 bool $internal = false, array $allow = []): array
     {
         $headers = ['Accept: application/json'];
+        $rid = currentRequestId();
+        if ($rid !== null) {
+            $headers[] = 'X-Request-ID: ' . $rid;      // chuyển tiếp mã truy vết của request đang xử lý
+        }
         if ($token !== null) {
             $headers[] = 'Authorization: Bearer ' . $token;
         }
@@ -33,7 +37,7 @@ final class Call_Auth_Order
         $raw = curl_exec($curl);
         $errno = curl_errno($curl);
         $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
-        curl_close($curl);
+        unset($curl);                                   // không gọi curl_close(): vô tác dụng từ PHP 8.0, lỗi thời từ 8.5
         if ($raw === false || $status === 0) {
             $msg = $errno === CURLE_OPERATION_TIMEDOUT ? "$service phản hồi quá thời gian chờ" : "Không kết nối được $service";
             throw new ApiError(503, 'UPSTREAM_UNAVAILABLE', $msg);
@@ -46,7 +50,7 @@ final class Call_Auth_Order
             return [$status, $body];
         }
         if ($status >= 500) {
-            error_log("[review] $service trả $status cho $method $url");
+            error_log("[review] $service trả $status cho $method $url rid=" . ($rid ?? "-"));
             throw new ApiError(502, 'UPSTREAM_ERROR', "$service đang gặp lỗi, vui lòng thử lại");
         }
         throw new ApiError(502, 'UPSTREAM_REJECTED', "$service từ chối yêu cầu nội bộ (HTTP $status)");

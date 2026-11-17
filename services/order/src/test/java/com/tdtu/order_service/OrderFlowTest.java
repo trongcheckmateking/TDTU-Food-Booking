@@ -52,6 +52,7 @@ class OrderFlowTest {
     static final Map<String, String> ITEM_STATUS = new ConcurrentHashMap<>(Map.of(ITEM1, "available", ITEM2, "available"));
     static volatile String notificationMode = "ok";
     static volatile boolean payoutMissing = false;
+    static volatile String lastAuthRid = null;          // X-Request-ID mà Auth giả nhận được
     static final String BANK_ACC = "0071000123456";
     static final List<String> EVENTS = Collections.synchronizedList(new ArrayList<>());
     /** Đúng danh sách enum("event", ...) trong parseEvent của services/notification/handlers.go. */
@@ -66,6 +67,7 @@ class OrderFlowTest {
             throw new RuntimeException(e);
         }
         FAKE.createContext("/api/users/me", ex -> {
+            lastAuthRid = ex.getRequestHeaders().getFirst("X-Request-ID");
             String token = String.valueOf(ex.getRequestHeaders().getFirst("Authorization")).replace("Bearer ", "");
             Map<String, String> users = Map.of("sv", SV + "|sinh_vien|Sinh Viên Một", "sv2", SV2 + "|sinh_vien|SV Hai",
                     "owner", OWNER + "|chu_quan|Chủ Quán", "owner2", OWNER2 + "|chu_quan|Chủ Quán 2", "admin", ADMIN + "|admin|Admin");
@@ -210,6 +212,26 @@ class OrderFlowTest {
         Res bad = call("GET", "/health", null, null, "Origin", "http://evil.example");
         assertTrue(bad.raw().headers().firstValue("access-control-allow-origin").isEmpty());
         assertEquals("NOT_FOUND", call("GET", "/khong-co", null, null).body().get("code").asText());
+    }
+
+    @Test
+    void xRequestIdTraLaiSinhMoiVaChuyenTiep() throws Exception {
+        Res ok = call("GET", "/api/cart", "sv", null, "X-Request-ID", "demo-rid-0001");
+        assertEquals(200, ok.status());
+        assertEquals("demo-rid-0001", ok.raw().headers().firstValue("X-Request-ID").orElse(null));
+        assertEquals("demo-rid-0001", lastAuthRid);                       // Order -> Auth mang theo rid
+        for (String bad : new String[] {null, "ngan", "co dau cach!!", "x".repeat(129)}) {
+            Res r = bad == null ? call("GET", "/khong-co", null, null) : call("GET", "/khong-co", null, null, "X-Request-ID", bad);
+            assertEquals(404, r.status());
+            assertTrue(r.raw().headers().firstValue("X-Request-ID").orElse("").matches("[0-9a-f]{32}"), String.valueOf(bad));
+        }
+        Res noToken = call("GET", "/api/orders/me", null, null, "X-Request-ID", "demo-rid-0002");   // response lỗi 401
+        assertEquals(401, noToken.status());
+        assertEquals("demo-rid-0002", noToken.raw().headers().firstValue("X-Request-ID").orElse(null));
+        Res pre = call("OPTIONS", "/health", null, null, "Origin", "http://127.0.0.1:8000", "Access-Control-Request-Method", "GET");
+        assertTrue(pre.raw().headers().firstValue("X-Request-ID").orElse("").matches("[0-9a-f]{32}"));
+        assertTrue(pre.raw().headers().firstValue("Access-Control-Expose-Headers").orElse("").contains("X-Request-ID"));
+        assertNull(org.slf4j.MDC.get("rid"));                              // không rò rỉ sang luồng khác
     }
 
     @Test

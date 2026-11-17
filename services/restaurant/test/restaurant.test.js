@@ -28,7 +28,9 @@ const USERS = {
   admin: { id: U(1), role: 'admin', name: 'Admin', email: 'a@x.vn', status: 'active' },
 };
 let authMode = 'ok';
+let lastAuthRid = null;                                    // X-Request-ID Auth giả nhận được (kiểm tra chuyển tiếp)
 const fakeAuth = http.createServer((req, res) => {
+  lastAuthRid = req.headers['x-request-id'] ?? null;
   if (authMode === 'hang') return;                         // không trả lời -> timeout
   if (authMode === '500') { res.writeHead(500); return res.end('{}'); }
   if (authMode === 'badjson') { res.writeHead(200); return res.end('<html>'); }
@@ -93,6 +95,26 @@ test('health, docs, CORS, 404 JSON', async () => {
   const bad = await fetch(`${base}/health`, { headers: { Origin: 'http://evil.example' } });
   assert.equal(bad.headers.get('access-control-allow-origin'), null);
   assert.equal((await api('GET', '/khong-co')).body.code, 'NOT_FOUND');
+});
+
+test('X-Request-ID: trả lại rid hợp lệ, sinh mới khi sai, chuyển tiếp sang Auth, có trên cả response lỗi', async () => {
+  const ok = await api('GET', '/api/restaurants/mine', { headers: { ...H('owner'), 'X-Request-ID': 'demo-rid-0001' } });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get('x-request-id'), 'demo-rid-0001');
+  assert.equal(lastAuthRid, 'demo-rid-0001');               // gọi Auth sau await vẫn giữ đúng rid (AsyncLocalStorage)
+  for (const bad of [undefined, 'ngan', 'co dau cach!!', 'x'.repeat(129)]) {
+    const r = await api('GET', '/khong-co', { headers: bad === undefined ? {} : { 'X-Request-ID': bad } });
+    assert.equal(r.status, 404);
+    assert.match(r.headers.get('x-request-id'), /^[0-9a-f]{32}$/, String(bad));
+  }
+  const gen = await api('GET', '/api/restaurants/mine', { headers: H('owner') });
+  assert.equal(lastAuthRid, gen.headers.get('x-request-id'));
+  const pre = await fetch(`${base}/health`, { method: 'OPTIONS', headers: { Origin: 'http://127.0.0.1:8000',
+    'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'x-request-id' } });
+  assert.match(pre.headers.get('x-request-id'), /^[0-9a-f]{32}$/);
+  assert.match(pre.headers.get('access-control-allow-headers'), /X-Request-ID/);
+  const cors = await fetch(`${base}/health`, { headers: { Origin: 'http://127.0.0.1:8000' } });
+  assert.equal(cors.headers.get('access-control-expose-headers'), 'X-Request-ID');
 });
 
 test('quán mới chờ duyệt, chủ quán không tự mở', async () => {

@@ -112,7 +112,7 @@ func TestCallServiceErrorMapping(t *testing.T) {
 		{"http://127.0.0.1:9", "UPSTREAM_UNAVAILABLE"},
 	}
 	for _, c := range cases {
-		_, _, err := callService("GET", c.url, "X", "")
+		_, _, err := callService("", "GET", c.url, "X", "")
 		if e, ok := err.(*ApiError); !ok || e.Code != c.code {
 			t.Errorf("%s: mong đợi %s, nhận %v", c.url, c.code, err)
 		}

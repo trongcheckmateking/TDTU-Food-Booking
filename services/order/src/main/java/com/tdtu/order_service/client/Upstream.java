@@ -2,6 +2,7 @@ package com.tdtu.order_service.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.tdtu.order_service.config.Env;
+import com.tdtu.order_service.config.WebConfig;
 import com.tdtu.order_service.web.ApiError;
 import com.tdtu.order_service.web.Json;
 import java.io.IOException;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Gọi REST sang service khác, có timeout và ánh xạ lỗi thống nhất với 4 service còn lại:
@@ -43,6 +45,8 @@ public final class Upstream {
                 .header("Accept", "application/json");
         if (token != null) b.header("Authorization", "Bearer " + token);
         if (internal) b.header("X-Internal-Key", Env.internalKey());
+        String rid = MDC.get(WebConfig.RID_MDC);                // chuyển tiếp mã truy vết (worker nền: không có)
+        if (rid != null) b.header(WebConfig.RID_HEADER, rid);
         if (json != null) {
             try {
                 b.header("Content-Type", "application/json")
