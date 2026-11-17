@@ -5,7 +5,7 @@
    - Mất mạng khi mở trang chưa lưu: hiện offline.html. */
 "use strict";
 
-const VERSION = "tdtu-food-v2";
+const VERSION = "tdtu-food-v3";                     // v3: màn hình nhập mã OTP xác nhận email
 const SHELL = [
   "/index.html", "/student.html", "/owner.html", "/offline.html", "/dieu-khoan.html", "/quyen-rieng-tu.html",
   "/assets/style.css", "/assets/fonts/fonts.css", "/assets/app.js", "/assets/covers.js", "/assets/profile.js",

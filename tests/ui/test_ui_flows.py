@@ -79,6 +79,69 @@ class Page:
         self.ctx.close()
 
 
+# ---------------------------------------------------------------- xác nhận email bằng OTP
+def _cfg(name: str, default: str | None = None) -> str | None:
+    """Cấu hình của hệ thống đang chạy: biến môi trường UI_<tên> trước, rồi .env ở thư mục gốc."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from common import config
+    return os.environ.get("UI_" + name) or config.get(name, default)
+
+
+def _http():
+    import requests
+    s = requests.Session()
+    s.trust_env = False
+    s.verify = not INSECURE
+    return s
+
+
+def read_otp(email: str) -> str:
+    """Mã OTP mới nhất gửi tới email, đọc từ hộp thư của nhà cung cấp email giả lập (GET /api/emails)."""
+    r = _http().get(_cfg("MOCK_EMAIL_URL", "http://127.0.0.1:9000").rstrip("/") + "/api/emails",
+                    headers={"X-API-Key": _cfg("EMAIL_API_KEY") or ""}, params={"to": email}, timeout=5)
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert items, f"chưa có email nào gửi tới {email}"
+    return re.search(r"\b(\d{6})\b", items[0]["content"]).group(1)
+
+
+def wait_signup_result(p: Page) -> bool:
+    """Sau khi bấm Tạo tài khoản: True nếu hiện form nhập mã OTP, False nếu vào thẳng trang (OTP tắt)."""
+    for _ in range(100):
+        if re.search(r"(student|owner)\.html", p.page.url):
+            return False
+        try:
+            if p.page.locator("#fOtp").is_visible():
+                return True
+        except Exception:                      # trang đang chuyển: thử lại
+            pass
+        p.page.wait_for_timeout(100)
+    raise AssertionError("không thấy form OTP cũng không chuyển trang sau khi đăng ký")
+
+
+def finish_signup(p: Page, email: str):
+    """OTP bật: nhập mã từ hộp thư rồi vào trang; OTP tắt: đã vào trang luôn."""
+    if wait_signup_result(p):
+        expect(p.page.locator("#msg")).to_contain_text("Đã gửi mã xác nhận")
+        expect(p.page.locator("#oEmail")).to_have_value(email)
+        p.page.fill("#oCode", read_otp(email))
+        p.page.click("#fOtp button[type=submit]")
+    p.page.wait_for_url(re.compile(r"(student|owner)\.html"))
+
+
+def register_on_page(p: Page, email: str):
+    p.page.goto(BASE + "/index.html")
+    p.page.click("#tReg")
+    p.page.fill("#rName", "Người Kiểm Thử OTP"); p.page.fill("#rEmail", email); p.page.fill("#rPw", "matkhau123")
+    p.page.check("#rTerms")
+    p.page.click("#fReg button[type=submit]")
+
+
+def wrong(code: str) -> str:
+    return f"{(int(code) + 1) % 10 ** 6:06d}"
+
+
 def test_full_flow_three_roles(browser, tmp_path):
     run = uuid.uuid4().hex[:6]           # mã riêng cho lần chạy: test chạy lại nhiều lần được
     png = tmp_path / "anh.png"
@@ -305,7 +368,7 @@ def test_full_flow_three_roles(browser, tmp_path):
     expect(tmp.page.locator("#msg")).to_contain_text("Điều khoản sử dụng")
     tmp.page.check("#rTerms")
     tmp.page.click("#fReg button[type=submit]")
-    tmp.page.wait_for_url(re.compile(r"student\.html"))
+    finish_signup(tmp, email)                                # OTP bật: nhập mã gửi qua email rồi mới vào trang
     # tài khoản vừa tạo: màn hướng dẫn nhận món (mã 3 số) hiện ra, đi hết 4 bước
     guide = tmp.page.locator(".guide")
     expect(guide).to_contain_text("Bước 1/4")
@@ -345,6 +408,70 @@ def test_full_flow_three_roles(browser, tmp_path):
     for p in (sv, cq, ad, tmp):
         p.close()
     assert not errors, errors
+
+
+def test_signup_otp_wrong_code_resend_and_mobile_layout(browser):
+    """Điện thoại: đăng ký -> form nhập mã; sai mã báo số lần còn lại; gửi lại quá sớm bị chặn (server trả retry_after,
+    nút đếm ngược lại); nhập đúng mã -> vào trang sinh viên. Không có thanh cuộn ngang."""
+    p = Page(browser, viewport=(390, 844))
+    email = f"uiotp{uuid.uuid4().hex[:6]}@student.tdtu.edu.vn"
+    register_on_page(p, email)
+    if not wait_signup_result(p):
+        p.close()
+        pytest.skip("hệ thống đang tắt OTP (OTP_ENABLED=false)")
+    expect(p.page.locator("#authTitle")).to_have_text("Xác nhận email")
+    expect(p.page.locator("#fLogin")).to_be_hidden()
+    expect(p.page.locator("#oResend")).to_be_disabled()                     # vừa gửi: đếm ngược
+    expect(p.page.locator("#oResend")).to_contain_text("Gửi lại mã (")
+    assert p.page.evaluate("document.documentElement.scrollWidth - window.innerWidth") <= 1
+    p.shot("08_otp_mobile")
+    code = read_otp(email)
+    p.page.fill("#oCode", "12ab")                                            # chỉ nhận chữ số, đủ 6 số mới gửi
+    expect(p.page.locator("#oCode")).to_have_value("12")
+    p.page.click("#fOtp button[type=submit]")
+    expect(p.page.locator("#msg")).to_contain_text("Nhập đủ 6 chữ số")
+    p.page.fill("#oCode", wrong(code))
+    p.page.click("#fOtp button[type=submit]")
+    expect(p.page.locator("#msg")).to_contain_text("còn 4 lần thử")
+    # bấm gửi lại trước khi hết giờ (bỏ qua nút bị khóa): server từ chối, giao diện đếm ngược theo retry_after
+    p.page.evaluate("document.querySelector('#oResend').disabled = false")
+    p.page.click("#oResend")
+    expect(p.page.locator("#msg")).to_contain_text("Vui lòng chờ")
+    expect(p.page.locator("#oResend")).to_be_disabled()
+    p.page.fill("#oCode", code)
+    p.page.click("#fOtp button[type=submit]")
+    p.page.wait_for_url(re.compile(r"student\.html"))
+    assert p.page.evaluate("document.documentElement.scrollWidth - window.innerWidth") <= 1
+    assert not [e for e in p.errors if "HTTP 5" in e or "pageerror" in e], p.errors
+    p.close()
+
+
+def test_login_unverified_account_shows_otp_form(browser):
+    """Tài khoản đăng ký nhưng chưa nhập mã: đăng nhập đúng mật khẩu -> hiện form OTP (không vào trang)."""
+    p = Page(browser)
+    p.page.goto(BASE + "/index.html")
+    cfg = p.page.evaluate("window.APP_CONFIG.services.auth")
+    auth = cfg if cfg.startswith("http") else BASE + cfg
+    email = f"uichua{uuid.uuid4().hex[:6]}@student.tdtu.edu.vn"
+    r = _http().post(auth + "/api/users/register", json={"name": "Chưa Xác Nhận", "email": email,
+                                                         "password": "matkhau123", "accept_terms": True}, timeout=10)
+    assert r.status_code == 201, r.text
+    if not r.json().get("verification_required"):
+        p.close()
+        pytest.skip("hệ thống đang tắt OTP (OTP_ENABLED=false)")
+    p.login(email, "matkhau123")
+    expect(p.page.locator("#fOtp")).to_be_visible()
+    expect(p.page.locator("#msg")).to_contain_text("chưa được xác nhận")
+    expect(p.page.locator("#oEmail")).to_have_value(email)
+    p.page.click("#oBack")                                                  # quay lại đăng nhập: điền sẵn email
+    expect(p.page.locator("#fOtp")).to_be_hidden()
+    expect(p.page.locator("#lEmail")).to_have_value(email)
+    p.page.fill("#lPw", "matkhau123")
+    p.page.click("#fLogin button[type=submit]")
+    p.page.fill("#oCode", read_otp(email))
+    p.page.click("#fOtp button[type=submit]")
+    p.page.wait_for_url(re.compile(r"student\.html"))
+    p.close()
 
 
 def test_session_expired_redirects(browser):

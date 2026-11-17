@@ -14,7 +14,10 @@
   const TITLES = { login: ["Chào bạn", "Đăng nhập bằng email đã đăng ký"], sinh_vien: ["Tạo tài khoản sinh viên", "Mất chưa tới một phút"],
                    chu_quan: ["Mở quán trên TDTU Food", "Tạo tài khoản chủ quán, sau đó gửi thông tin quán để được duyệt"] };
   let banksLoaded = false;
+  let otpTimer = null;
+  const stopTimer = () => { if (otpTimer) { clearInterval(otpTimer); otpTimer = null; } };
   const tab = reg => {
+    stopTimer(); $("#fOtp").classList.add("hidden");
     $("#tLogin").classList.toggle("on", !reg); $("#tReg").classList.toggle("on", reg);
     $("#fLogin").classList.toggle("hidden", reg); $("#fReg").classList.toggle("hidden", !reg); show("");
     const [t, sub] = TITLES[reg ? $("#rRole").value : "login"] || TITLES.login;
@@ -45,16 +48,72 @@
   const fromQr = new Map([["sinh-vien", "sinh_vien"], ["chu-quan", "chu_quan"]]).get(params.get("dang-ky"));
   if (fromQr) open(fromQr, false);
 
-  async function doLogin(email, password, btn) {
-    const r = await act(btn, () => api("auth", "/api/users/login", { method: "POST", auth: false, body: { email, password } }));
+  const signedIn = r => {
     Session.set({ token: r.access_token, user: r.user, exp: Date.now() + r.expires_in * 1000 });
     location.href = HOME[r.user.role];
+  };
+  async function doLogin(email, password, btn) {
+    signedIn(await act(btn, () => api("auth", "/api/users/login", { method: "POST", auth: false, body: { email, password } })));
   }
+
+  // ---------------- Xác nhận email bằng mã OTP 6 số (đăng ký xong, hoặc đăng nhập khi chưa xác nhận)
+  /** Đếm ngược nút "Gửi lại mã": hết giờ mới bấm được (server vẫn kiểm tra lại và trả retry_after nếu quá sớm). */
+  const countdown = seconds => {
+    stopTimer();
+    const btn = $("#oResend");
+    let left = Math.max(0, Math.round(Number(seconds) || 0));
+    const paint = () => { btn.disabled = left > 0; btn.textContent = left > 0 ? `Gửi lại mã (${left}s)` : "Gửi lại mã"; };
+    paint();
+    if (left > 0) otpTimer = setInterval(() => { left -= 1; paint(); if (left <= 0) stopTimer(); }, 1000);
+  };
+  /** Hiện form nhập mã. sent: true / false (gửi email lỗi) / null (đến từ đăng nhập, không biết lúc gửi). */
+  function showOtp(email, sent, resendAfter) {
+    $("#fLogin").classList.add("hidden"); $("#fReg").classList.add("hidden"); $("#fOtp").classList.remove("hidden");
+    $("#tLogin").classList.remove("on"); $("#tReg").classList.remove("on");
+    $("#authTitle").textContent = "Xác nhận email";
+    $("#authTitle").nextElementSibling.textContent = "Nhập mã 6 số TDTU Food vừa gửi tới email của bạn";
+    $("#oEmail").value = email; $("#oCode").value = "";
+    if (sent === true) show("Đã gửi mã xác nhận tới " + email + ". Mã có hiệu lực 5 phút, kiểm tra cả thư mục Spam.");
+    else if (sent === false) show("Tài khoản đã tạo nhưng chưa gửi được email xác nhận. Chờ hết giờ rồi bấm Gửi lại mã.", true);
+    else show("Email chưa được xác nhận. Nhập mã đã gửi tới email, hoặc bấm Gửi lại mã để nhận mã mới.", true);
+    countdown(resendAfter);
+    $("#oCode").focus();
+  }
+  $("#oCode").oninput = e => { const v = e.target.value.replace(/\D/g, "").slice(0, 6); if (v !== e.target.value) e.target.value = v; };
+  $("#fOtp").onsubmit = async e => {
+    e.preventDefault();
+    const email = $("#oEmail").value.trim(), code = $("#oCode").value.trim();
+    if (!/^\d{6}$/.test(code)) { $("#oCode").focus(); return show("Nhập đủ 6 chữ số của mã xác nhận", true); }
+    try {
+      signedIn(await act(e.submitter, () => api("auth", "/api/users/verify-otp", { method: "POST", auth: false, body: { email, code } })));
+    } catch (err) {
+      if (err.code === "ALREADY_VERIFIED") { tab(false); $("#lEmail").value = email; return show(err.message); }
+      show(err.message, true);                      // vd "Mã xác nhận không đúng, còn 3 lần thử"
+      $("#oCode").select();
+    }
+  };
+  $("#oResend").onclick = async e => {
+    const email = $("#oEmail").value.trim();
+    try {
+      const r = await act(e.currentTarget, () => api("auth", "/api/users/resend-otp", { method: "POST", auth: false, body: { email } }));
+      show(r.otp_sent ? "Đã gửi mã mới tới " + email + ". Mã cũ không còn dùng được." : r.detail, !r.otp_sent);
+      countdown(r.resend_after);
+      $("#oCode").value = ""; $("#oCode").focus();
+    } catch (err) {
+      show(err.message, true);
+      if (err.body && err.body.retry_after) countdown(err.body.retry_after);
+    }
+  };
+  $("#oBack").onclick = () => { const email = $("#oEmail").value; tab(false); $("#lEmail").value = email; $("#lPw").focus(); };
+
   $("#fLogin").onsubmit = e => {
     e.preventDefault();
     const email = $("#lEmail").value.trim(), pw = $("#lPw").value;
     if (!email || !pw) return show("Nhập email và mật khẩu", true);
-    doLogin(email, pw, e.submitter).catch(err => show(err.message, true));
+    doLogin(email, pw, e.submitter).catch(err => {
+      if (err.code === "EMAIL_NOT_VERIFIED") return showOtp((err.body && err.body.email) || email, null, 0);
+      show(err.message, true);
+    });
   };
   $("#fReg").onsubmit = async e => {
     e.preventDefault();
@@ -71,8 +130,9 @@
       Object.assign(body, { bank_bin: $("#rBankBin").value, bank_account: $("#rBankAcc").value, bank_holder: holder });
     }
     try {
-      await act(e.submitter, () => api("auth", "/api/users/register", { method: "POST", auth: false, body }));
+      const u = await act(e.submitter, () => api("auth", "/api/users/register", { method: "POST", auth: false, body }));
       try { localStorage.setItem("tdtu_welcome", "1"); } catch (err) { /* không có bộ nhớ: bỏ qua hướng dẫn */ }
+      if (u.verification_required) return showOtp(u.email, u.otp_sent, u.resend_after);   // bật OTP: nhập mã rồi mới vào
       await doLogin(body.email, body.password, null);
     } catch (err) { show(err.message, true); }
   };
