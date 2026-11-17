@@ -8,12 +8,12 @@ import subprocess
 import pytest
 
 import manage
-from tests.conftest import INTERNAL, SERVICES
+from tests.conftest import CORE_SERVICES, INTERNAL
 
 LANG = {"auth": "Python", "restaurant": "Node.js", "order": "Java", "notification": "Go", "review": "PHP"}
 
 
-@pytest.mark.parametrize("name", SERVICES)
+@pytest.mark.parametrize("name", CORE_SERVICES)       # hợp đồng chung của 5 service (không gồm mock email bên thứ ba)
 def test_docs_openapi_health_cors_404(system, name):
     c = system.clients[name]
     docs = c.get("/docs")

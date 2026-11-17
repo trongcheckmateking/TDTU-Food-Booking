@@ -1,24 +1,33 @@
-"""Auth Service (cổng 8001): đăng ký, đăng nhập, hồ sơ, quản lý tài khoản.
+"""Auth Service (cổng 8001): đăng ký (xác nhận email bằng mã OTP), đăng nhập JWT, hồ sơ, quản lý tài khoản.
 
 Chạy: python -m uvicorn services.auth.app:app --port 8001 (từ thư mục gốc, hoặc dùng manage.py start)
+
+Endpoint dùng `def` (không `async def`): sqlite3 và bcrypt là thao tác chặn (blocking), FastAPI chạy hàm `def` trong
+threadpool nên không chặn event loop (Unit 3).
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import logging
+import math
 import re
+import secrets
 import sqlite3
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 import bcrypt
 import jwt
 from fastapi import Depends, Query, Request, Security
 from fastapi.responses import FileResponse
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from common import config
@@ -30,8 +39,9 @@ from common.security import bearer, require_internal
 from common.validators import Page, PageSize
 
 from .banks import BANKS, bank_name
-from .models import (SCHEMA, BankOut, EraseOut, LoginIn, PasswordChange, PayoutIn, PayoutOut, ProfileUpdate, RegisterIn,
-                     RoleUpdate, StatusUpdate, TokenOut, UserOut, UserPage)
+from .models import (SCHEMA, BankOut, EraseOut, LoginIn, OtpResendIn, OtpResendOut, OtpVerifyIn, PasswordChange,
+                     PayoutIn, PayoutOut, ProfileUpdate, RegisterIn, RegisterOut, RoleUpdate, StatusUpdate, TokenOut,
+                     UserOut, UserPage)
 
 log = logging.getLogger("tdtu.auth")
 db = Database("auth.db", SCHEMA)
@@ -49,6 +59,16 @@ def _migrate() -> None:
                 except sqlite3.OperationalError as e:      # worker khác vừa thêm cột
                     if "duplicate column" not in str(e):
                         raise
+        if "email_verified_at" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:
+            try:
+                with transaction(conn):
+                    conn.execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT")
+                    # Tài khoản có từ trước khi có OTP coi như đã xác nhận. Chỉ chạy ĐÚNG LÚC vừa thêm cột (cùng giao
+                    # dịch); chạy ở mỗi lần khởi động thì người chưa nhập mã OTP cũng bị coi là đã xác nhận.
+                    conn.execute("UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL")
+            except sqlite3.OperationalError as e:          # worker khác vừa thêm cột (và đã chạy UPDATE)
+                if "duplicate column" not in str(e):
+                    raise
     finally:
         conn.close()
 
@@ -132,9 +152,14 @@ def reserve_attempt(conn: sqlite3.Connection, key: str) -> None:
 
 def public(u: dict) -> dict:
     out = {k: u.get(k) for k in ("id", "name", "email", "role", "phone", "status", "created_at", "terms_accepted_at",
-                                 "erased_at", "avatar_url", "bank_bin", "bank_account", "bank_holder")}
+                                 "erased_at", "avatar_url", "bank_bin", "bank_account", "bank_holder",
+                                 "email_verified_at")}
     out["bank_name"] = bank_name(u.get("bank_bin"))
     return out
+
+
+def token_response(u: dict) -> dict:
+    return {"access_token": issue_token(u), "token_type": "bearer", "expires_in": token_hours() * 3600, "user": public(u)}
 
 
 def issue_token(u: dict) -> str:
@@ -151,12 +176,20 @@ def load_user(conn: sqlite3.Connection, user_id: str) -> dict:
     return u
 
 
-def current_user(creds: HTTPAuthorizationCredentials | None = Security(bearer),
+# Unit 18: OAuth2 password flow - nút Authorize của Swagger nhập email + mật khẩu, gọi POST /api/users/token.
+# Giữ thêm HTTPBearer (dán token có sẵn) để Swagger có cả 2 cách; mã lỗi không đổi.
+oauth2 = OAuth2PasswordBearer(tokenUrl="/api/users/token", auto_error=False,
+                              description="Đăng nhập bằng email (ô username) và mật khẩu: Swagger gọi POST /api/users/token")
+
+
+def current_user(token: Annotated[str | None, Security(oauth2)],
+                 creds: Annotated[HTTPAuthorizationCredentials | None, Security(bearer)],
                  conn: sqlite3.Connection = Depends(conn_dep)) -> dict:
-    if creds is None or not creds.credentials:
+    token = token or (creds.credentials if creds else None)
+    if not token:
         raise ApiError(401, "UNAUTHORIZED", "Cần đăng nhập (thiếu Bearer token)")
     try:
-        payload = jwt.decode(creds.credentials, config.jwt_secret(), algorithms=["HS256"], issuer=ISSUER,
+        payload = jwt.decode(token, config.jwt_secret(), algorithms=["HS256"], issuer=ISSUER,
                              options={"require": ["sub", "exp", "iat", "ver", "iss"]})
         uuid.UUID(str(payload["sub"]))
     except jwt.ExpiredSignatureError:
@@ -177,41 +210,231 @@ def admin_only(u: dict = Depends(current_user)) -> dict:
     return u
 
 
-# ------------------------------------------------------------------ người dùng
-@app.post("/api/users/register", response_model=UserOut, status_code=201, tags=["auth"],
-          summary="Đăng ký tài khoản sinh viên hoặc chủ quán")
-def register(data: RegisterIn, conn: sqlite3.Connection = Depends(conn_dep)):
-    uid, ts = new_id(), now_iso()
+# ------------------------------------------------------------------ mã OTP xác nhận email
+@dataclass(frozen=True)
+class OtpSettings:
+    ttl: int                # giây mã còn hiệu lực
+    max_attempts: int       # số lần nhập sai tối đa của một mã
+    resend_seconds: int     # khoảng cách tối thiểu giữa 2 lần gửi mã
+    per_hour: int           # số mã tối đa mỗi user trong 60 phút (tính cả mã lúc đăng ký)
+
+
+def otp_enabled() -> bool:
+    return (config.get("OTP_ENABLED", "false") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def otp_settings() -> OtpSettings:
+    return OtpSettings(ttl=max(60, config.get_int("OTP_TTL_SECONDS", 300)),
+                       max_attempts=max(1, config.get_int("OTP_MAX_ATTEMPTS", 5)),
+                       resend_seconds=max(0, config.get_int("OTP_RESEND_SECONDS", 60)),
+                       per_hour=max(1, config.get_int("OTP_RESEND_PER_HOUR", 5)))
+
+
+def otp_hash(otp_id: str, code: str) -> str:
+    """Chỉ lưu HMAC của mã (khóa JWT_SECRET, gắn với id của mã): lộ DB cũng không biết mã."""
+    return hmac.new(config.jwt_secret().encode(), f"otp:{otp_id}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def _parse_iso(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+def new_otp(conn: sqlite3.Connection, user_id: str) -> tuple[str, str]:
+    """Tạo mã mới và vô hiệu mã cũ của user. GỌI BÊN TRONG transaction. Trả (otp_id, mã) - mã chỉ để gửi email."""
+    otp_id, now = new_id(), datetime.now(timezone.utc)
+    code = f"{secrets.randbelow(10 ** 6):06d}"
+    conn.execute("UPDATE otp_codes SET used_at=? WHERE user_id=? AND purpose='verify_email' AND used_at IS NULL",
+                 (_iso(now), user_id))
+    conn.execute("INSERT INTO otp_codes (id,user_id,purpose,code_hash,expires_at,attempts,used_at,created_at) "
+                 "VALUES (?,?,'verify_email',?,?,0,NULL,?)",
+                 (otp_id, user_id, otp_hash(otp_id, code), _iso(now + timedelta(seconds=otp_settings().ttl)), _iso(now)))
+    return otp_id, code
+
+
+def send_otp(user: dict, otp_id: str, code: str) -> bool:
+    """Nhờ Notification gửi email mã (sau khi đã commit). Notification / provider lỗi -> False, không ném lỗi:
+    đăng ký vẫn thành công, người dùng bấm gửi lại mã. Log không bao giờ có mã."""
+    body = {"to": user["email"], "template": "otp", "purpose": "verify_email", "code": code, "user_id": user["id"],
+            "expires_in_seconds": otp_settings().ttl, "idempotency_key": f"otp-{otp_id}"}
     try:
-        with transaction(conn):
+        call("POST", f"{config.service_url('NOTIFICATION')}/internal/notifications/email", "Notification Service",
+             internal=True, json=body)
+        return True
+    except ApiError as e:
+        log.warning("Chưa gửi được mã xác nhận email cho user %s (otp %s): %s", user["id"], otp_id, e.code)
+        return False
+
+
+def _otp_error(status: int, code: str, message: str, **extra) -> ApiError:
+    headers = {"Retry-After": str(extra["retry_after"])} if "retry_after" in extra else None
+    return ApiError(status, code, message, extra=extra or None, headers=headers)
+
+
+def _require_otp() -> OtpSettings:
+    if not otp_enabled():
+        raise ApiError(404, "OTP_DISABLED", "Hệ thống không bật xác nhận email bằng mã OTP")
+    return otp_settings()
+
+
+# ------------------------------------------------------------------ người dùng
+@app.post("/api/users/register", response_model=RegisterOut, status_code=201, tags=["auth"],
+          summary="Đăng ký tài khoản sinh viên hoặc chủ quán",
+          description="Bật OTP (OTP_ENABLED=true): tài khoản chưa xác nhận email, mã 6 số được gửi qua email "
+                      "(verification_required=true); Notification / nhà cung cấp email lỗi thì đăng ký vẫn thành công "
+                      "với otp_sent=false, người dùng bấm gửi lại mã.")
+def register(data: RegisterIn, conn: sqlite3.Connection = Depends(conn_dep)):
+    uid, ts, otp = new_id(), now_iso(), otp_enabled()
+    otp_id = code = None
+    try:
+        with transaction(conn):          # user + mã OTP trong CÙNG giao dịch
             conn.execute("INSERT INTO users (id,name,email,password_hash,role,phone,status,token_version,created_at,"
-                         "updated_at,terms_accepted_at,bank_bin,bank_account,bank_holder) "
-                         "VALUES (?,?,?,?,?,?, 'active', 0, ?, ?, ?, ?, ?, ?)",
+                         "updated_at,terms_accepted_at,bank_bin,bank_account,bank_holder,email_verified_at) "
+                         "VALUES (?,?,?,?,?,?, 'active', 0, ?, ?, ?, ?, ?, ?, ?)",
                          (uid, data.name, data.email, hash_password(data.password), data.role, data.phone, ts, ts, ts,
-                          data.bank_bin, data.bank_account, data.bank_holder))
+                          data.bank_bin, data.bank_account, data.bank_holder, None if otp else ts))
+            if otp:
+                otp_id, code = new_otp(conn, uid)
     except sqlite3.IntegrityError as e:
         if "users.email" in str(e):
             raise ApiError(409, "EMAIL_EXISTS", "Email đã được sử dụng")
         raise
-    return public(load_user(conn, uid))
+    user = load_user(conn, uid)
+    sent = send_otp(user, otp_id, code) if otp else None          # gọi mạng SAU khi commit
+    return {**public(user), "verification_required": otp, "otp_sent": sent,
+            "resend_after": otp_settings().resend_seconds if otp else None}
 
 
-@app.post("/api/users/login", response_model=TokenOut, tags=["auth"],
-          summary="Đăng nhập, nhận access_token. Sai 5 lần trong 15 phút (cùng email + IP) thì khóa tạm 15 phút (429)")
-def login(data: LoginIn, request: Request, conn: sqlite3.Connection = Depends(conn_dep)):
-    key = attempt_key(data.email, request)
+def _login(email: str, password: str, request: Request, conn: sqlite3.Connection) -> dict:
+    key = attempt_key(email, request)
     reserve_attempt(conn, key)
-    u = row(conn.execute("SELECT * FROM users WHERE email=?", (data.email,)).fetchone())
+    u = row(conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone())
     if not u:
-        check_password(data.password, _DUMMY_HASH)          # giữ thời gian phản hồi tương đương
+        check_password(password, _DUMMY_HASH)              # giữ thời gian phản hồi tương đương
         raise ApiError(401, "INVALID_CREDENTIALS", "Sai email hoặc mật khẩu")
-    if not check_password(data.password, u["password_hash"]):
+    if not check_password(password, u["password_hash"]):
         raise ApiError(401, "INVALID_CREDENTIALS", "Sai email hoặc mật khẩu")
     conn.execute("DELETE FROM login_attempts WHERE key=?", (key,))
     if u["status"] != "active":
         raise ApiError(403, "ACCOUNT_LOCKED", "Tài khoản đã bị khóa, liên hệ quản trị viên")
-    return {"access_token": issue_token(u), "token_type": "bearer", "expires_in": token_hours() * 3600,
-            "user": public(u)}
+    # chỉ báo chưa xác nhận khi đã ĐÚNG mật khẩu (không lộ email nào đã đăng ký); admin luôn được coi là đã xác nhận
+    if otp_enabled() and u["role"] != "admin" and not u.get("email_verified_at"):
+        raise ApiError(403, "EMAIL_NOT_VERIFIED", "Email chưa được xác nhận. Nhập mã OTP đã gửi tới email của bạn",
+                       extra={"email": u["email"]})
+    return token_response(u)
+
+
+@app.post("/api/users/login", response_model=TokenOut, tags=["auth"],
+          summary="Đăng nhập, nhận access_token. Sai 5 lần trong 15 phút (cùng email + IP) thì khóa tạm 15 phút (429)",
+          responses={403: {"description": "ACCOUNT_LOCKED, hoặc EMAIL_NOT_VERIFIED (kèm email) khi chưa nhập mã OTP"}})
+def login(data: LoginIn, request: Request, conn: sqlite3.Connection = Depends(conn_dep)):
+    return _login(data.email, data.password, request, conn)
+
+
+@app.post("/api/users/token", response_model=TokenOut, tags=["auth"],
+          summary="Đăng nhập dạng form OAuth2 (username = email): dùng cho nút Authorize của Swagger (Unit 18)",
+          description="Cùng logic, giới hạn và mã lỗi với POST /api/users/login (JSON, giao diện web dùng).")
+def token(form: Annotated[OAuth2PasswordRequestForm, Depends()], request: Request,
+          conn: sqlite3.Connection = Depends(conn_dep)):
+    try:
+        data = LoginIn(email=form.username, password=form.password)
+    except ValidationError as e:
+        errors = [{"field": "username" if err["loc"][0] == "email" else str(err["loc"][0]), "message": err["msg"]}
+                  for err in e.errors()]
+        raise ApiError(422, "VALIDATION_ERROR", "Dữ liệu không hợp lệ", extra={"errors": errors})
+    return _login(data.email, data.password, request, conn)
+
+
+@app.post("/api/users/verify-otp", response_model=TokenOut, tags=["auth"],
+          summary="Nhập mã OTP xác nhận email: đúng thì xác nhận và đăng nhập luôn (trả token như login)",
+          responses={400: {"description": "OTP_INVALID (+remaining_attempts) / OTP_EXPIRED"},
+                     403: {"description": "ACCOUNT_LOCKED"}, 404: {"description": "OTP_DISABLED"},
+                     409: {"description": "ALREADY_VERIFIED"}, 429: {"description": "OTP_LOCKED: sai quá số lần"}})
+def verify_otp(data: OtpVerifyIn, conn: sqlite3.Connection = Depends(conn_dep)):
+    s = _require_otp()
+    now = datetime.now(timezone.utc)
+    error: ApiError | None = None
+    user_id = None
+    # Ghi kết quả vào biến, chỉ raise SAU khi ra khỏi khối transaction: raise bên trong sẽ ROLLBACK và mất lần đếm sai.
+    with transaction(conn):              # BEGIN IMMEDIATE: các lần thử đồng thời xếp hàng, đếm đúng từng lần
+        u = row(conn.execute("SELECT * FROM users WHERE email=?", (data.email,)).fetchone())
+        otp = None
+        if u and u["status"] == "active" and not u.get("email_verified_at") and u["role"] != "admin":
+            otp = row(conn.execute("SELECT * FROM otp_codes WHERE user_id=? AND purpose='verify_email' AND used_at IS NULL "
+                                   "ORDER BY created_at DESC LIMIT 1", (u["id"],)).fetchone())
+        if not u:
+            error = ApiError(400, "OTP_EXPIRED", "Mã xác nhận không còn hiệu lực, vui lòng gửi lại mã")
+        elif u["status"] != "active":
+            error = ApiError(403, "ACCOUNT_LOCKED", "Tài khoản đã bị khóa, liên hệ quản trị viên")
+        elif u.get("email_verified_at") or u["role"] == "admin":
+            error = ApiError(409, "ALREADY_VERIFIED", "Email đã được xác nhận, hãy đăng nhập")
+        elif not otp:
+            error = ApiError(400, "OTP_EXPIRED", "Mã xác nhận không còn hiệu lực, vui lòng gửi lại mã")
+        elif otp["attempts"] >= s.max_attempts:
+            error = ApiError(429, "OTP_LOCKED", "Nhập sai quá nhiều lần, vui lòng gửi lại mã mới")
+        elif otp["expires_at"] <= _iso(now):
+            error = ApiError(400, "OTP_EXPIRED", "Mã xác nhận đã hết hạn, vui lòng gửi lại mã")
+        else:
+            # cộng lần thử TRƯỚC khi so mã: yêu cầu đồng thời không vượt quá số lần cho phép
+            n = conn.execute("UPDATE otp_codes SET attempts=attempts+1 WHERE id=? AND used_at IS NULL AND attempts<?",
+                             (otp["id"], s.max_attempts)).rowcount
+            if n == 0:
+                error = ApiError(429, "OTP_LOCKED", "Nhập sai quá nhiều lần, vui lòng gửi lại mã mới")
+            elif hmac.compare_digest(otp_hash(otp["id"], data.code), otp["code_hash"]):
+                conn.execute("UPDATE otp_codes SET used_at=? WHERE id=?", (_iso(now), otp["id"]))
+                conn.execute("UPDATE users SET email_verified_at=?, updated_at=? WHERE id=? AND email_verified_at IS NULL",
+                             (_iso(now), _iso(now), u["id"]))
+                user_id = u["id"]
+            else:
+                remaining = s.max_attempts - (otp["attempts"] + 1)
+                error = (ApiError(429, "OTP_LOCKED", "Nhập sai quá nhiều lần, vui lòng gửi lại mã mới") if remaining <= 0
+                         else ApiError(400, "OTP_INVALID", f"Mã xác nhận không đúng, còn {remaining} lần thử",
+                                       extra={"remaining_attempts": remaining}))
+    if error:
+        raise error
+    log.info("User %s đã xác nhận email bằng mã OTP", user_id)
+    return token_response(load_user(conn, user_id))
+
+
+@app.post("/api/users/resend-otp", response_model=OtpResendOut, status_code=202, tags=["auth"],
+          summary="Gửi lại mã OTP (mã cũ hết hiệu lực)",
+          description="Luôn trả 202 với email chưa đăng ký / đã xác nhận (otp_sent=false, không gửi) để không lộ email "
+                      "nào đã đăng ký. Cách lần gửi trước tối thiểu OTP_RESEND_SECONDS giây, tối đa OTP_RESEND_PER_HOUR "
+                      "mã mỗi giờ (tính cả mã lúc đăng ký).",
+          responses={404: {"description": "OTP_DISABLED"},
+                     429: {"description": "OTP_RESEND_TOO_SOON / OTP_RESEND_LIMIT (+retry_after, header Retry-After)"}})
+def resend_otp(data: OtpResendIn, conn: sqlite3.Connection = Depends(conn_dep)):
+    s = _require_otp()
+    now = datetime.now(timezone.utc)
+    error: ApiError | None = None
+    user = otp_id = code = None
+    with transaction(conn):              # không raise bên trong: giữ nguyên quy tắc ghi kết quả rồi raise sau
+        u = row(conn.execute("SELECT * FROM users WHERE email=?", (data.email,)).fetchone())
+        if u and u["status"] == "active" and u["role"] != "admin" and not u.get("email_verified_at"):
+            last = conn.execute("SELECT MAX(created_at) FROM otp_codes WHERE user_id=? AND purpose='verify_email'",
+                                (u["id"],)).fetchone()[0]
+            hour_ago = _iso(now - timedelta(hours=1))
+            recent = conn.execute("SELECT COUNT(*), MIN(created_at) FROM otp_codes WHERE user_id=? AND "
+                                  "purpose='verify_email' AND created_at > ?", (u["id"], hour_ago)).fetchone()
+            waited = (now - _parse_iso(last)).total_seconds() if last else None
+            if waited is not None and waited < s.resend_seconds:
+                wait = max(1, math.ceil(s.resend_seconds - waited))
+                error = _otp_error(429, "OTP_RESEND_TOO_SOON", f"Vui lòng chờ {wait} giây rồi gửi lại mã", retry_after=wait)
+            elif recent[0] >= s.per_hour:
+                wait = max(1, math.ceil((_parse_iso(recent[1]) + timedelta(hours=1) - now).total_seconds()))
+                error = _otp_error(429, "OTP_RESEND_LIMIT",
+                                   f"Đã gửi {s.per_hour} mã trong 1 giờ, vui lòng thử lại sau {max(1, round(wait / 60))} phút",
+                                   retry_after=wait)
+            else:
+                user = u
+                otp_id, code = new_otp(conn, u["id"])
+    if error:
+        raise error
+    if not user:
+        return {"detail": "Nếu email đã đăng ký và chưa xác nhận, mã mới đã được gửi", "otp_sent": False,
+                "resend_after": s.resend_seconds}
+    sent = send_otp(user, otp_id, code)
+    return {"detail": "Đã gửi mã xác nhận mới" if sent else "Chưa gửi được email, vui lòng thử lại sau ít phút",
+            "otp_sent": sent, "resend_after": s.resend_seconds}
 
 
 @app.get("/api/users/me", response_model=UserOut, tags=["auth"],
@@ -385,9 +608,9 @@ def get_avatar(name: str):
 
 # ------------------------------------------------------------------ admin
 @app.get("/api/users", response_model=UserPage, tags=["admin"], summary="Danh sách tài khoản (admin)")
-def list_users(role: Literal["sinh_vien", "chu_quan", "admin"] | None = None,
-               status: Literal["active", "locked"] | None = None,
-               q: str | None = Query(None, max_length=100), page: Page = 1, page_size: PageSize = 20,
+def list_users(role: Annotated[Literal["sinh_vien", "chu_quan", "admin"] | None, Query()] = None,
+               status: Annotated[Literal["active", "locked"] | None, Query()] = None,
+               q: Annotated[str | None, Query(max_length=100)] = None, page: Page = 1, page_size: PageSize = 20,
                _: dict = Depends(admin_only), conn: sqlite3.Connection = Depends(conn_dep)):
     sql, args = "SELECT * FROM users WHERE 1=1", []
     if role:
@@ -509,6 +732,7 @@ def erase_everywhere(conn: sqlite3.Connection, target: dict) -> dict:
                      (ERASED_NAME, f"da-xoa-{target['id']}@tdtu-food.invalid", ts, ts, target["id"]))
         conn.execute("DELETE FROM login_attempts WHERE substr(key, 1, ?) = ?",
                      (len(target["email"]) + 1, target["email"] + "|"))
+        conn.execute("DELETE FROM otp_codes WHERE user_id=?", (target["id"],))
     remove_avatar_file(target.get("avatar_url"))
     _journal_erasure(target["id"], ts)
     return {"user": public(load_user(conn, target["id"])), "services": results}

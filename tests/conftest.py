@@ -14,6 +14,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import socket
 import sqlite3
 import subprocess
@@ -32,11 +33,16 @@ sys.path.insert(0, str(ROOT))
 
 import manage  # noqa: E402
 
-SERVICES = ["auth", "restaurant", "order", "notification", "review"]
+CORE_SERVICES = ["auth", "restaurant", "order", "notification", "review"]      # 5 service theo hợp đồng chung
+SERVICES = [*CORE_SERVICES, "mock_email"]                                      # + nhà cung cấp email giả lập
 JWT_SECRET = "test-jwt-secret-" + "x" * 32
 INTERNAL_KEY = "test-internal-key-" + "y" * 16
 INTERNAL = {"X-Internal-Key": INTERNAL_KEY}
+EMAIL_API_KEY = "test-email-api-key-" + "z" * 16
+EMAIL_WEBHOOK_SECRET = "test-webhook-secret-" + "w" * 16
 HTTP_TIMEOUT = 2
+EMAIL_PROVIDER_TIMEOUT = 1                  # phải nhỏ hơn HTTP_TIMEOUT (Auth chờ Notification lâu hơn Notification chờ provider)
+OTP_RE = re.compile(r"\b(\d{6})\b")
 
 
 def free_port() -> int:
@@ -167,13 +173,18 @@ class Cluster:
         self.env_file = tmp / "test.env"
         self.env_file.write_text("", encoding="utf-8")
         self.base_env = {k: v for k, v in os.environ.items() if not k.endswith("_URL") and k not in (
-            "JWT_SECRET", "INTERNAL_KEY", "DATA_DIR", "OUTBOX_INTERVAL", "CORS_ORIGINS", "HTTP_TIMEOUT")}
+            "JWT_SECRET", "INTERNAL_KEY", "DATA_DIR", "OUTBOX_INTERVAL", "CORS_ORIGINS", "HTTP_TIMEOUT")
+            and not k.startswith(("OTP_", "EMAIL_", "MOCK_EMAIL_"))}
         self.base_env.update({
             "TDTU_ENV_FILE": str(self.env_file), "TDTU_ROOT": str(ROOT), "JWT_SECRET": JWT_SECRET,
             "INTERNAL_KEY": INTERNAL_KEY, "DATA_DIR": str(self.data), "OUTBOX_INTERVAL": "0",
             "HTTP_TIMEOUT": str(HTTP_TIMEOUT), "CORS_ORIGINS": "http://127.0.0.1:8000", "LOG_LEVEL": "INFO",
             "NOTIFICATION_DB_URL": pg, "NOTIFICATION_DB_SCHEMA": self.schema, "PYTHONUTF8": "1",
-            "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"})
+            "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
+            # đặt TƯỜNG MINH: os.environ có thể đã bị nạp .env cá nhân (OTP_ENABLED=true...)
+            "OTP_ENABLED": "false", "OTP_TTL_SECONDS": "300", "OTP_MAX_ATTEMPTS": "5", "OTP_RESEND_SECONDS": "60",
+            "OTP_RESEND_PER_HOUR": "5", "EMAIL_API_KEY": EMAIL_API_KEY, "EMAIL_WEBHOOK_SECRET": EMAIL_WEBHOOK_SECRET,
+            "EMAIL_PROVIDER_TIMEOUT": str(EMAIL_PROVIDER_TIMEOUT), "MOCK_EMAIL_RATE_PER_MINUTE": "1000"})
         self.procs: dict[str, subprocess.Popen] = {}
         self.url = {s: f"http://127.0.0.1:{p}" for s, p in self.ports.items()}
 
@@ -183,6 +194,8 @@ class Cluster:
         for s in SERVICES:
             port = self.ports[s] if s == name else self.proxies[s].port
             env[f"{s.upper()}_URL"] = f"http://127.0.0.1:{port}"
+        env["EMAIL_PROVIDER_URL"] = env["MOCK_EMAIL_URL"]                       # Notification -> mock qua fault proxy
+        env["EMAIL_WEBHOOK_URL"] = env["NOTIFICATION_URL"] + "/internal/webhooks/email-status"
         return env
 
     def start(self, name: str):
@@ -239,6 +252,50 @@ def cluster(tmp_path_factory):
         c.stop_all()
 
 
+class OtpAuth:
+    """Auth thứ hai BẬT OTP (OTP_ENABLED=true), DATA_DIR riêng; gọi Notification thật qua fault proxy của cụm."""
+
+    def __init__(self, cluster: Cluster, port: int, data: Path, log: Path, proc: subprocess.Popen):
+        self.cluster, self.port, self.data, self.log, self.proc = cluster, port, data, log, proc
+        self.url = f"http://127.0.0.1:{port}"
+        self.client = Client(self.url)
+
+    def db(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.data / "auth.db", timeout=10, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 10000")
+        return conn
+
+    def log_text(self) -> str:
+        return self.log.read_text(encoding="utf-8", errors="replace")
+
+
+@pytest.fixture(scope="session")
+def otp_auth(cluster):
+    port, data, log = free_port(), cluster.tmp / "data_otp", cluster.tmp / "auth_otp.log"
+    data.mkdir(exist_ok=True)
+    cmd, cwd, extra = manage.service_command("auth", "127.0.0.1", port)
+    env = {**cluster.env_for("auth"), **extra, "OTP_ENABLED": "true", "DATA_DIR": str(data),
+           "AUTH_URL": f"http://127.0.0.1:{port}"}
+    kw = {"cwd": cwd, "stdout": open(log, "a", encoding="utf-8"), "stderr": subprocess.STDOUT, "env": env}
+    if os.name != "nt":
+        kw["start_new_session"] = True
+    proc = subprocess.Popen(cmd, **kw)
+    deadline = time.time() + 60
+    while not manage.http_ok(f"http://127.0.0.1:{port}/health"):
+        if proc.poll() is not None or time.time() > deadline:
+            raise RuntimeError("Auth (OTP) không khởi động được:\n" + log.read_text(encoding="utf-8", errors="replace")[-3000:])
+        time.sleep(0.3)
+    try:
+        yield OtpAuth(cluster, port, data, log, proc)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 # ---------------------------------------------------------------------------- tiện ích cho test
 TEST_BANK = {"bank_bin": "970436", "bank_account": "0071000123456", "bank_holder": "Chủ Quán Test"}
 
@@ -257,6 +314,24 @@ class System:
 
     def fault(self, service: str, kind: str | None):
         self.c.proxies[service].mode = kind
+
+    def emails(self, to: str) -> list[dict]:
+        """Hộp thư của mock provider (gọi thẳng cổng thật của mock, không qua fault proxy)."""
+        r = self.mock_email.get("/api/emails", headers={"X-API-Key": EMAIL_API_KEY}, params={"to": to, "limit": 100})
+        assert r.status_code == 200, r.text
+        return r.json()["items"]
+
+    def read_otp(self, email: str) -> str:
+        """Mã OTP mới nhất gửi tới email (lấy 6 chữ số trong trường content). Không in mã ra log của test."""
+        items = self.emails(email)
+        assert items, f"chưa có email nào gửi tới {email}"
+        m = OTP_RE.search(items[0]["content"])
+        assert m, "email không có mã 6 số"
+        return m.group(1)
+
+    def mock_mode(self, mode: str):
+        r = self.mock_email.post("/api/_control/mode", headers={"X-API-Key": EMAIL_API_KEY}, json={"mode": mode})
+        assert r.status_code == 200, r.text
 
     def email(self, local: str) -> str:
         """Email duy nhất cho mỗi test: an@x.vn -> an.<tag>@x.vn."""
@@ -341,6 +416,7 @@ def system(cluster):
     yield s
     for svc in SERVICES:
         s.fault(svc, None)
+    s.mock_mode("ok")
 
 
 @pytest.fixture

@@ -77,7 +77,7 @@ class Api:
 
 
 def seed() -> dict:
-    from services.auth.admin_tools import create_admin
+    from services.auth.admin_tools import create_admin, mark_email_verified
     api = Api()
     counts = {"users": 0, "restaurants": 0, "menu_items": 0, "orders": 0, "reviews": 0}
     counts["users"] += create_admin(ADMIN[0], ADMIN[1], ADMIN_PASSWORD)
@@ -94,6 +94,7 @@ def seed() -> dict:
             counts["users"] += 1
         elif r.status_code != 409:
             raise RuntimeError(f"Đăng ký {email}: {r.status_code} {r.text[:200]}")
+        mark_email_verified(email)            # tài khoản demo không cần nhập mã OTP (ghi thẳng DB của Auth như admin)
         key = email.split("@")[0].split(".")[0]
         if email.startswith("sv3"):
             continue

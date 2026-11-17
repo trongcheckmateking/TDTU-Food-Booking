@@ -34,10 +34,18 @@ def _body(code: str, message: str, **extra) -> dict:
     return {"detail": message, "code": code, **extra}
 
 
+def _headers(status: int, headers: dict[str, str] | None) -> dict[str, str] | None:
+    """401 luôn kèm WWW-Authenticate: Bearer (RFC 6750, Unit 18): client biết cần gửi Bearer token."""
+    if status != 401:
+        return headers
+    return {**(headers or {}), "WWW-Authenticate": "Bearer"}
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError):
-        return JSONResponse(_body(exc.code, exc.message, **exc.extra), status_code=exc.status, headers=exc.headers)
+        return JSONResponse(_body(exc.code, exc.message, **exc.extra), status_code=exc.status,
+                            headers=_headers(exc.status, exc.headers))
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_: Request, exc: StarletteHTTPException):
@@ -47,7 +55,7 @@ def install_error_handlers(app: FastAPI) -> None:
         if exc.status_code == 405:
             message = "Phương thức HTTP không được hỗ trợ"
         return JSONResponse(_body(DEFAULT_CODES.get(exc.status_code, "ERROR"), message),
-                            status_code=exc.status_code, headers=getattr(exc, "headers", None))
+                            status_code=exc.status_code, headers=_headers(exc.status_code, getattr(exc, "headers", None)))
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError):

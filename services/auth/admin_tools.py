@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from common.db import new_id, now_iso
+from common.db import new_id, now_iso, transaction
 
 from .app import _migrate, db, hash_password
 from .models import RegisterIn
@@ -25,12 +25,33 @@ def create_admin(email: str, name: str, password: str) -> bool:
     conn = db.connect()
     ts = now_iso()
     try:
+        # admin do người vận hành tạo bằng email của chính họ: coi như đã xác nhận email
         conn.execute("INSERT INTO users (id,name,email,password_hash,role,phone,status,token_version,created_at,"
-                     "updated_at,terms_accepted_at) VALUES (?,?,?,?, 'admin', NULL, 'active', 0, ?, ?, ?)",
-                     (new_id(), data.name, data.email, hash_password(data.password), ts, ts, ts))
+                     "updated_at,terms_accepted_at,email_verified_at) VALUES (?,?,?,?, 'admin', NULL, 'active', 0, ?, ?, ?, ?)",
+                     (new_id(), data.name, data.email, hash_password(data.password), ts, ts, ts, ts))
         return True
     except sqlite3.IntegrityError:
         return False
+    finally:
+        conn.close()
+
+
+def mark_email_verified(email: str) -> bool:
+    """Đánh dấu email đã xác nhận (dùng cho dữ liệu demo `seed` / vận hành), vô hiệu mã OTP đang chờ.
+    Trả False nếu không có tài khoản. Gọi lại nhiều lần không đổi thời điểm xác nhận đầu tiên."""
+    db.init()
+    _migrate()
+    conn = db.connect()
+    ts = now_iso()
+    try:
+        with transaction(conn):
+            u = conn.execute("SELECT id FROM users WHERE email=?", (email.strip().lower(),)).fetchone()
+            if not u:
+                return False
+            conn.execute("UPDATE users SET email_verified_at=COALESCE(email_verified_at, ?), updated_at=? WHERE id=?",
+                         (ts, ts, u[0]))
+            conn.execute("UPDATE otp_codes SET used_at=? WHERE user_id=? AND used_at IS NULL", (ts, u[0]))
+        return True
     finally:
         conn.close()
 

@@ -331,3 +331,295 @@ def test_payout_change_needs_password_and_internal_lookup_needs_key(system):
     sv_id = system.auth.get("/api/users/me", headers=sv).json()["id"]
     r = system.auth.get(f"/internal/users/{sv_id}/payout", headers=INTERNAL)
     assert r.status_code == 404 and r.json()["code"] == "PAYOUT_MISSING"
+
+
+# ------------------------------------------------------------------ xác nhận email bằng mã OTP (Unit 20)
+# Auth bật OTP chạy riêng (fixture otp_auth); gửi mã qua Notification THẬT -> mock provider THẬT.
+# Không dùng time.sleep để chờ hết hạn / hết thời gian chờ gửi lại: sửa expires_at / created_at trong DB.
+PW = "matkhau123"
+
+
+def otp_register(system, otp_auth, local="sv.otp@student.tdtu.edu.vn", **kw):
+    email = system.email(local)
+    body = {"name": "Sinh Viên OTP", "email": email, "password": PW, "accept_terms": True, **kw}
+    r = otp_auth.client.post("/api/users/register", json=body)
+    assert r.status_code == 201, r.text
+    return email, r.json()
+
+
+def otp_login(otp_auth, email, pw=PW):
+    return otp_auth.client.post("/api/users/login", json={"email": email, "password": pw})
+
+
+def verify(otp_auth, email, code):
+    return otp_auth.client.post("/api/users/verify-otp", json={"email": email, "code": code})
+
+
+def resend(otp_auth, email):
+    return otp_auth.client.post("/api/users/resend-otp", json={"email": email})
+
+
+def wrong(code: str) -> str:
+    return f"{(int(code) + 1) % 10 ** 6:06d}"
+
+
+def age_codes(otp_auth, email, seconds: int):
+    """Lùi created_at mọi mã của user `seconds` giây (giả lập thời gian trôi qua)."""
+    conn = otp_auth.db()
+    conn.execute("UPDATE otp_codes SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', created_at, ?) "
+                 "WHERE user_id = (SELECT id FROM users WHERE email=?)", (f"-{seconds} seconds", email))
+    conn.close()
+
+
+def otp_rows(otp_auth, email):
+    conn = otp_auth.db()
+    rows = [dict(r) for r in conn.execute("SELECT o.* FROM otp_codes o JOIN users u ON u.id=o.user_id WHERE u.email=? "
+                                          "ORDER BY o.created_at", (email,))]
+    conn.close()
+    return rows
+
+
+def otp_admin(otp_auth, system, verified=False):
+    """Admin trong DB của Auth bật OTP (giống create-admin), mặc định email_verified_at = NULL."""
+    import bcrypt
+    email = system.email("admin.otp@test.tdtu.vn")
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    conn = otp_auth.db()
+    conn.execute("INSERT INTO users (id,name,email,password_hash,role,status,token_version,created_at,updated_at,"
+                 "email_verified_at) VALUES (?,?,?,?, 'admin', 'active', 0, ?, ?, ?)",
+                 (str(uuid.uuid4()), "Admin OTP", email, bcrypt.hashpw(PW.encode(), bcrypt.gensalt(4)).decode(), ts, ts,
+                  ts if verified else None))
+    conn.close()
+    return email
+
+
+def test_otp_register_sends_code_and_blocks_login(system, otp_auth):
+    email, u = otp_register(system, otp_auth)
+    assert (u["verification_required"], u["otp_sent"], u["resend_after"], u["email_verified_at"]) == (True, True, 60, None)
+    assert "password_hash" not in u
+    mails = system.emails(email)
+    assert len(mails) == 1 and mails[0]["subject"] == "TDTU Food - Mã xác nhận email" and mails[0]["tag"] == "otp"
+    assert "5 phút" in mails[0]["content"]
+    r = otp_login(otp_auth, email)
+    assert r.status_code == 403 and r.json()["code"] == "EMAIL_NOT_VERIFIED" and r.json()["email"] == email, r.text
+    r = otp_login(otp_auth, email, "saimatkhau9")                    # sai mật khẩu: không lộ tình trạng xác nhận
+    assert r.status_code == 401 and r.json()["code"] == "INVALID_CREDENTIALS"
+    # provider báo đã giao thư qua webhook có ký HMAC -> email_logs chuyển delivered
+    admin = system.admin()
+    status = None
+    for _ in range(50):
+        logs = system.notification.get("/api/admin/email-logs", headers=admin, params={"user_id": u["id"]}).json()
+        status = logs["items"][0]["status"] if logs["items"] else None
+        if status == "delivered":
+            break
+        time.sleep(0.1)
+    assert status == "delivered", logs
+
+
+def test_otp_verify_returns_token_only_once(system, otp_auth):
+    email, u = otp_register(system, otp_auth)
+    code = system.read_otp(email)
+    for bad in ({"email": email, "code": "12345"}, {"email": email, "code": 123456}, {"email": email, "code": "12a456"},
+                {"email": email, "code": code, "x": 1}, {"email": "khong-phai-email", "code": code}):
+        assert otp_auth.client.post("/api/users/verify-otp", json=bad).status_code == 422, bad
+    r = verify(otp_auth, email.upper(), code)                           # email không phân biệt hoa thường
+    assert r.status_code == 200, r.text
+    tok = r.json()
+    assert tok["token_type"] == "bearer" and tok["access_token"] and tok["user"]["id"] == u["id"]
+    me = otp_auth.client.get("/api/users/me", headers={"Authorization": "Bearer " + tok["access_token"]}).json()
+    assert me["email_verified_at"]
+    r = verify(otp_auth, email, code)
+    assert r.status_code == 409 and r.json()["code"] == "ALREADY_VERIFIED"
+    assert otp_login(otp_auth, email).status_code == 200
+
+
+def test_otp_wrong_attempts_then_locked(system, otp_auth):
+    email, _ = otp_register(system, otp_auth)
+    code = system.read_otp(email)
+    for left in (4, 3, 2, 1):
+        r = verify(otp_auth, email, wrong(code))
+        assert (r.status_code, r.json()["code"], r.json()["remaining_attempts"]) == (400, "OTP_INVALID", left), r.text
+    r = verify(otp_auth, email, wrong(code))
+    assert r.status_code == 429 and r.json()["code"] == "OTP_LOCKED"
+    r = verify(otp_auth, email, code)                                   # đúng mã nhưng mã đã bị khóa
+    assert r.status_code == 429 and r.json()["code"] == "OTP_LOCKED"
+    assert otp_rows(otp_auth, email)[-1]["attempts"] == 5
+    age_codes(otp_auth, email, 61)                                       # gửi mã mới thì nhập lại được
+    assert resend(otp_auth, email).json()["otp_sent"] is True
+    assert verify(otp_auth, email, system.read_otp(email)).status_code == 200
+
+
+def test_otp_expired(system, otp_auth):
+    email, _ = otp_register(system, otp_auth)
+    conn = otp_auth.db()
+    conn.execute("UPDATE otp_codes SET expires_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 seconds') "
+                 "WHERE user_id = (SELECT id FROM users WHERE email=?)", (email,))
+    conn.close()
+    r = verify(otp_auth, email, system.read_otp(email))
+    assert r.status_code == 400 and r.json()["code"] == "OTP_EXPIRED", r.text
+    assert otp_rows(otp_auth, email)[-1]["attempts"] == 0              # mã hết hạn không tính lần thử
+
+
+def test_otp_resend_too_soon_then_new_code_replaces_old(system, otp_auth):
+    email, _ = otp_register(system, otp_auth)
+    old = system.read_otp(email)
+    r = resend(otp_auth, email)
+    assert r.status_code == 429 and r.json()["code"] == "OTP_RESEND_TOO_SOON", r.text
+    assert 1 <= r.json()["retry_after"] <= 60 and r.headers["Retry-After"] == str(r.json()["retry_after"])
+    age_codes(otp_auth, email, 61)
+    r = resend(otp_auth, email)
+    assert r.status_code == 202 and r.json()["otp_sent"] is True and r.json()["resend_after"] == 60, r.text
+    new = system.read_otp(email)
+    assert len(system.emails(email)) == 2
+    rows = otp_rows(otp_auth, email)
+    assert len(rows) == 2 and rows[0]["used_at"] and rows[1]["used_at"] is None     # mã cũ bị vô hiệu
+    if new != old:                                                      # (xác suất trùng 1/1.000.000)
+        r = verify(otp_auth, email, old)
+        assert r.status_code == 400 and r.json()["code"] == "OTP_INVALID", r.text
+    assert verify(otp_auth, email, new).status_code == 200
+
+
+def test_otp_resend_hourly_limit_counts_registration_code(system, otp_auth):
+    email, _ = otp_register(system, otp_auth)                          # mã 1 (lúc đăng ký)
+    for _ in range(4):                                                  # mã 2..5
+        age_codes(otp_auth, email, 61)
+        assert resend(otp_auth, email).status_code == 202
+    age_codes(otp_auth, email, 61)
+    r = resend(otp_auth, email)                                         # mã thứ 6 trong 1 giờ
+    assert r.status_code == 429 and r.json()["code"] == "OTP_RESEND_LIMIT", r.text
+    assert 0 < r.json()["retry_after"] <= 3600 and r.headers["Retry-After"] == str(r.json()["retry_after"])
+    age_codes(otp_auth, email, 3600)                                    # sau 1 giờ được gửi lại
+    assert resend(otp_auth, email).status_code == 202
+    assert len(system.emails(email)) == 6
+
+
+def test_otp_resend_unknown_or_verified_is_202_without_sending(system, otp_auth):
+    ghost = system.email("khongco@student.tdtu.edu.vn")
+    r = resend(otp_auth, ghost)
+    assert (r.status_code, r.json()["otp_sent"]) == (202, False) and system.emails(ghost) == []
+    email, _ = otp_register(system, otp_auth)
+    assert verify(otp_auth, email, system.read_otp(email)).status_code == 200
+    age_codes(otp_auth, email, 61)
+    r = resend(otp_auth, email)
+    assert (r.status_code, r.json()["otp_sent"]) == (202, False) and len(system.emails(email)) == 1
+    assert r.json()["detail"] == resend(otp_auth, ghost).json()["detail"]       # cùng câu trả lời: không lộ email
+
+
+def test_otp_register_ok_when_notification_down(system, otp_auth):
+    system.fault("notification", "down")
+    email, u = otp_register(system, otp_auth)
+    assert (u["verification_required"], u["otp_sent"]) == (True, False), u
+    system.fault("notification", "500")
+    email2, u2 = otp_register(system, otp_auth, local="sv.otp2@student.tdtu.edu.vn")
+    assert u2["otp_sent"] is False
+    system.fault("notification", None)
+    assert system.emails(email) == []
+    age_codes(otp_auth, email, 61)
+    r = resend(otp_auth, email)
+    assert r.json()["otp_sent"] is True, r.text
+    assert verify(otp_auth, email, system.read_otp(email)).status_code == 200
+
+
+def test_otp_provider_500_and_timeout(system, otp_auth):
+    system.mock_mode("fail500")
+    email, u = otp_register(system, otp_auth)
+    assert u["otp_sent"] is False and system.emails(email) == []
+    system.mock_mode("ok")
+    system.fault("mock_email", "timeout")                                # provider treo: Notification bỏ sau 1 giây
+    t0 = time.time()
+    email2, u2 = otp_register(system, otp_auth, local="sv.otp.cham@student.tdtu.edu.vn")
+    took = time.time() - t0
+    system.fault("mock_email", None)
+    assert u2["otp_sent"] is False and took < 3, took                   # 1s (provider) < 2s (HTTP_TIMEOUT của Auth)
+    admin = system.admin()
+    logs = system.notification.get("/api/admin/email-logs", headers=admin, params={"user_id": u2["id"]}).json()["items"]
+    assert logs and logs[0]["status"] == "failed" and "EMAIL_PROVIDER_UNAVAILABLE" in logs[0]["last_error"], logs
+    age_codes(otp_auth, email, 61)
+    assert resend(otp_auth, email).json()["otp_sent"] is True
+
+
+def test_otp_parallel_wrong_codes_counted_exactly(system, otp_auth):
+    import threading
+    email, _ = otp_register(system, otp_auth)
+    bad = wrong(system.read_otp(email))
+    results = []
+
+    def guess():
+        results.append(verify(otp_auth, email, bad).status_code)
+    threads = [threading.Thread(target=guess) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [400] * 4 + [429] * 6, results
+    assert otp_rows(otp_auth, email)[-1]["attempts"] == 5
+
+
+def test_otp_code_not_in_db_or_logs(system, otp_auth):
+    import re as _re
+    email, u = otp_register(system, otp_auth)
+    code = system.read_otp(email)
+    verify(otp_auth, email, wrong(code))
+    assert verify(otp_auth, email, code).status_code == 200
+    pattern = _re.compile(rf"\b{code}\b")
+    conn = otp_auth.db()
+    dump = " ".join(str(v) for t in ("users", "otp_codes") for r in conn.execute(f"SELECT * FROM {t}") for v in tuple(r))
+    conn.close()
+    assert not pattern.search(dump), "mã OTP không được lưu trong DB của Auth"
+    assert len(otp_rows(otp_auth, email)[0]["code_hash"]) == 64
+    for log in (otp_auth.log, system.c.tmp / "notification.log", system.c.tmp / "mock_email.log", system.c.tmp / "auth.log"):
+        assert not pattern.search(log.read_text(encoding="utf-8", errors="replace")), f"mã OTP xuất hiện trong {log.name}"
+
+
+def test_otp_admin_always_verified_and_disabled_endpoints(system, otp_auth):
+    email = otp_admin(otp_auth, system)                                 # email_verified_at = NULL
+    r = otp_login(otp_auth, email)
+    assert r.status_code == 200 and r.json()["user"]["role"] == "admin", r.text
+    assert verify(otp_auth, email, "123456").json()["code"] == "ALREADY_VERIFIED"
+    # Auth chính của cụm tắt OTP: đăng ký xác nhận luôn, 2 API OTP trả 404
+    u = system.register(system.email("tatotp@student.tdtu.edu.vn"))
+    assert (u["verification_required"], u["otp_sent"], u["resend_after"]) == (False, None, None) and u["email_verified_at"]
+    for path, body in (("/api/users/verify-otp", {"email": u["email"], "code": "123456"}),
+                       ("/api/users/resend-otp", {"email": u["email"]})):
+        r = system.auth.post(path, json=body)
+        assert r.status_code == 404 and r.json()["code"] == "OTP_DISABLED", r.text
+
+
+def test_token_endpoint_form_login(system, otp_auth):
+    email = system.email("form@student.tdtu.edu.vn")
+    system.register(email)
+    r = system.auth.post("/api/users/token", content={"username": email.upper(), "password": PW})
+    assert r.status_code == 200 and r.json()["token_type"] == "bearer", r.text
+    assert system.auth.get("/api/users/me", headers={"Authorization": "Bearer " + r.json()["access_token"]}).status_code == 200
+    r = system.auth.post("/api/users/token", content={"username": email, "password": "saimatkhau9"})
+    assert r.status_code == 401 and r.json()["code"] == "INVALID_CREDENTIALS"
+    r = system.auth.post("/api/users/token", content={"username": "khong-phai-email", "password": PW})
+    assert r.status_code == 422 and r.json()["errors"][0]["field"] == "username", r.text
+    assert system.auth.post("/api/users/token", json={"username": email, "password": PW}).status_code == 422  # phải là form
+    pending, _ = otp_register(system, otp_auth, local="form.otp@student.tdtu.edu.vn")
+    r = otp_auth.client.post("/api/users/token", content={"username": pending, "password": PW})
+    assert r.status_code == 403 and r.json()["code"] == "EMAIL_NOT_VERIFIED"
+    spec = system.auth.get("/openapi.json").json()["components"]["securitySchemes"]
+    assert any(v.get("type") == "oauth2" and v["flows"]["password"]["tokenUrl"] == "/api/users/token" for v in spec.values())
+
+
+def test_401_has_www_authenticate_header(system):
+    for r in (system.auth.get("/api/users/me"),
+              system.auth.get("/api/users/me", headers={"Authorization": "Bearer abc.def.ghi"}),
+              system.auth.post("/api/users/login", json={"email": system.email("x@student.tdtu.edu.vn"), "password": "a"})):
+        assert r.status_code == 401 and r.headers.get("WWW-Authenticate") == "Bearer", (r.status_code, r.headers)
+    assert "WWW-Authenticate" not in system.auth.get("/api/users", headers=system.user(
+        system.email("w@student.tdtu.edu.vn"))).headers                 # 403 không có header này
+
+
+def test_erase_deletes_otp_codes(system, otp_auth):
+    email, u = otp_register(system, otp_auth)
+    assert len(otp_rows(otp_auth, email)) == 1
+    admin_email = otp_admin(otp_auth, system, verified=True)
+    admin = {"Authorization": "Bearer " + otp_login(otp_auth, admin_email).json()["access_token"]}
+    r = otp_auth.client.post(f"/api/users/{u['id']}/erase", headers=admin)
+    assert r.status_code == 200, r.text
+    conn = otp_auth.db()
+    assert conn.execute("SELECT COUNT(*) FROM otp_codes WHERE user_id=?", (u["id"],)).fetchone()[0] == 0
+    conn.close()
+    assert r.json()["services"]["notification"]["emails_deleted"] >= 1

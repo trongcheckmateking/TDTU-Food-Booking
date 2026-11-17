@@ -30,9 +30,23 @@ CREATE TABLE IF NOT EXISTS users (
     -- tài khoản nhận tiền của chủ quán: sinh viên chuyển khoản trước bằng mã VietQR tạo từ 3 cột này
     bank_bin      TEXT,                            -- mã ngân hàng 6 số của Napas (banks.py)
     bank_account  TEXT,                            -- số tài khoản 6-19 chữ số
-    bank_holder   TEXT                             -- tên chủ tài khoản, in hoa không dấu
+    bank_holder   TEXT,                            -- tên chủ tài khoản, in hoa không dấu
+    email_verified_at TEXT                         -- lúc xác nhận email bằng mã OTP (NULL = chưa xác nhận)
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+-- Mã OTP xác nhận email: KHÔNG lưu mã, chỉ lưu HMAC-SHA256(JWT_SECRET, "otp:<id>:<mã>").
+-- Mỗi user tối đa 1 mã còn hiệu lực (used_at IS NULL): gửi mã mới thì mã cũ bị vô hiệu (điền used_at).
+CREATE TABLE IF NOT EXISTS otp_codes (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose    TEXT NOT NULL CHECK (purpose IN ('verify_email')),
+    code_hash  TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0,              -- số lần nhập sai (đủ OTP_MAX_ATTEMPTS thì khóa mã)
+    used_at    TEXT,                                    -- đã xác nhận thành công, hoặc bị thay bằng mã mới
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_otp_user ON otp_codes(user_id, purpose, created_at);
 -- Đăng nhập sai liên tiếp theo cặp (email, IP): quá ngưỡng thì khóa tạm, chống dò mật khẩu
 CREATE TABLE IF NOT EXISTS login_attempts (
     key          TEXT PRIMARY KEY,                 -- email|ip
@@ -63,7 +77,20 @@ def _payout_field(v: str | None, field: str) -> str | None:
     return v
 
 
-class RegisterIn(BaseModel):
+class UserBase(BaseModel):
+    """Trường chung của người dùng (Unit 17: UserBase -> model vào RegisterIn / model ra UserOut).
+    Lớp con khai báo lại kiểu chặt hơn khi cần (RegisterIn: họ tên 2-100 ký tự, email hợp lệ đưa về chữ thường).
+    `phone` khai báo riêng ở từng lớp vì luật kiểm tra khác nhau và để giữ nguyên thứ tự trường của OpenAPI."""
+    name: str
+    email: str
+
+
+class _UserId(BaseModel):
+    """Đặt sau UserBase trong danh sách lớp cha của UserOut để `id` đứng đầu như trước khi tách UserBase."""
+    id: str
+
+
+class RegisterIn(UserBase):
     model_config = STRICT
     name: text(2, 100)
     email: EmailStr
@@ -115,6 +142,36 @@ class LoginIn(BaseModel):
         return v.lower()
 
 
+OTP_CODE = r"^[0-9]{6}$"
+
+
+class OtpVerifyIn(BaseModel):
+    model_config = STRICT
+    email: EmailStr
+    code: str = Field(pattern=OTP_CODE, description="Mã 6 chữ số trong email xác nhận")
+
+    @field_validator("email")
+    @classmethod
+    def _lower(cls, v: str) -> str:
+        return v.lower()
+
+
+class OtpResendIn(BaseModel):
+    model_config = STRICT
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def _lower(cls, v: str) -> str:
+        return v.lower()
+
+
+class OtpResendOut(BaseModel):
+    detail: str
+    otp_sent: bool = Field(description="false: email chưa đăng ký / đã xác nhận, hoặc gửi thư lỗi (bấm gửi lại sau)")
+    resend_after: int = Field(description="Số giây tối thiểu trước khi được gửi lại mã")
+
+
 class ProfileUpdate(BaseModel):
     model_config = STRICT
     name: text(2, 100) | None = None
@@ -156,10 +213,8 @@ class PasswordChange(BaseModel):
     _pw = field_validator("new_password")(_password_rules)
 
 
-class UserOut(BaseModel):
-    id: str
-    name: str
-    email: str
+# Model ra: không bao giờ có password_hash (response_model lọc mọi trường không khai báo)
+class UserOut(UserBase, _UserId):
     role: Role
     phone: str | None = None
     status: UserStatus
@@ -171,6 +226,14 @@ class UserOut(BaseModel):
     bank_name: str | None = Field(None, description="Chủ quán: tên ngân hàng nhận tiền")
     bank_account: str | None = Field(None, description="Chủ quán: số tài khoản nhận tiền")
     bank_holder: str | None = Field(None, description="Chủ quán: tên chủ tài khoản")
+    email_verified_at: str | None = Field(None, description="Lúc xác nhận email bằng mã OTP (null = chưa xác nhận)")
+
+
+class RegisterOut(UserOut):
+    verification_required: bool = Field(description="true: phải nhập mã OTP gửi qua email rồi mới đăng nhập được")
+    otp_sent: bool | None = Field(None, description="Đã gửi mã chưa (false: Notification / nhà cung cấp email lỗi, bấm "
+                                                    "gửi lại mã); null khi tắt OTP")
+    resend_after: int | None = Field(None, description="Số giây tối thiểu trước khi được gửi lại mã; null khi tắt OTP")
 
 
 class EraseOut(BaseModel):
