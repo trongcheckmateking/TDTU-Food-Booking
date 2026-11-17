@@ -31,7 +31,7 @@ def free_port() -> int:
 class Cluster:
     def __init__(self, tmp: Path):
         self.tmp = tmp
-        self.ports = {n: free_port() for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW", "WEB")}
+        self.ports = {n: free_port() for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW", "WEB", "MOCK_EMAIL")}
         env = {k: v for k, v in os.environ.items()
                if k not in ("JWT_SECRET", "INTERNAL_KEY", "DATA_DIR", "OUTBOX_INTERVAL", "CORS_ORIGINS", "HTTP_TIMEOUT")}
         from tests.conftest import _pg_url
@@ -40,8 +40,11 @@ class Cluster:
                     "TDTU_ENV_FILE": str(tmp / ".env"), "TDTU_RUN_DIR": str(tmp / "run"), "TDTU_LOG_DIR": str(tmp / "logs"),
                     "DATA_DIR": str(tmp / "data"), "OUTBOX_INTERVAL": "2", "WEB_PORT": str(self.ports["WEB"]),
                     "CORS_ORIGINS": f"http://127.0.0.1:{self.ports['WEB']}", "LOG_LEVEL": "WARNING"})
-        for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW"):
+        for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW", "MOCK_EMAIL"):
             env[f"{n}_URL"] = f"http://127.0.0.1:{self.ports[n]}"
+        env["OTP_ENABLED"] = "false"            # luồng OTP qua manage.py start được bật ở Phase 6
+        env["EMAIL_PROVIDER_URL"] = env["MOCK_EMAIL_URL"]
+        env["EMAIL_WEBHOOK_URL"] = env["NOTIFICATION_URL"] + "/internal/webhooks/email-status"
         self.env = env
         self.url = {n.lower(): f"http://127.0.0.1:{p}" for n, p in self.ports.items()}
 
@@ -93,7 +96,7 @@ def register(c, email, role):
 
 def test_status_and_docs(cluster):
     r = cluster.manage("status")
-    assert r.stdout.count("OK") == 6, r.stdout
+    assert r.stdout.count("OK") == 7, r.stdout              # 5 service + mock_email + giao diện
     for lang in ("Python/FastAPI", "Node.js/Express", "Java/Spring Boot", "Go/Gin", "PHP"):
         assert lang in r.stdout
     for name in ("auth", "restaurant", "order", "notification", "review"):

@@ -1,11 +1,13 @@
 # TDTU Food Booking chạy bằng Docker: 5 service (5 ngôn ngữ, mỗi service một cơ sở dữ liệu riêng) + giao diện web
-# + PostgreSQL + gateway HTTPS (một tên miền) + container sao lưu tự động. Hướng dẫn đầy đủ: docs/DEPLOY.md
+# + PostgreSQL + gateway HTTPS (một tên miền) + nhà cung cấp email giả lập (mock-email, gửi mã OTP)
+# + container sao lưu tự động. Hướng dẫn: docs/DOCKER.md (máy cá nhân), docs/DEPLOY.md (máy chủ).
 #
-#   python manage.py init-env               lần đầu: tạo .env (JWT_SECRET, INTERNAL_KEY, POSTGRES_PASSWORD)
+#   python manage.py init-env               lần đầu: tạo .env (JWT_SECRET, INTERNAL_KEY, POSTGRES_PASSWORD, khóa email)
 #   docker compose up -d --build            build và chạy; mở https://<SERVER_NAME>
 #   docker compose exec auth python -m services.auth.admin_tools --email <email> --name "<họ tên>"
 #
 # Chỉ gateway mở cổng ra ngoài (HTTP_PORT, HTTPS_PORT). Service và PostgreSQL chỉ gọi được trong mạng nội bộ.
+# mock-email mở thêm cổng MOCK_EMAIL_PORT (mặc định 9000) CHỈ trên 127.0.0.1 của máy chủ để xem hộp thư lấy mã OTP.
 name: tdtu-food
 
 x-logging: &logging
@@ -26,6 +28,10 @@ x-env: &env
   ORDER_URL: http://order:8003
   NOTIFICATION_URL: http://notification:8004
   REVIEW_URL: http://review:8005
+  # gửi mã OTP: Auth -> Notification -> mock-email; mock-email báo kết quả giao thư về Notification qua webhook
+  MOCK_EMAIL_URL: http://mock-email:9000
+  EMAIL_PROVIDER_URL: http://mock-email:9000
+  EMAIL_WEBHOOK_URL: http://notification:8004/internal/webhooks/email-status
   CORS_ORIGINS: ${PUBLIC_ORIGIN:-https://localhost}
   DATA_DIR: /data
   BIND_HOST: 0.0.0.0
@@ -90,6 +96,16 @@ services:
     image: tdtu-food/review
     environment: { <<: *env }
     volumes: [review-data:/data]
+
+  # Nhà cung cấp email GIẢ LẬP (Unit 20). Không service nào depends_on nó: provider sập thì đăng ký vẫn thành công
+  # (otp_sent=false), người dùng bấm gửi lại mã sau.
+  mock-email:
+    <<: *service
+    build: { context: ., dockerfile: services/mock_email/Dockerfile }
+    image: tdtu-food/mock-email
+    environment: { <<: *env }
+    ports:
+      - "127.0.0.1:${MOCK_EMAIL_PORT:-9000}:9000"
 
   web:
     <<: *service
