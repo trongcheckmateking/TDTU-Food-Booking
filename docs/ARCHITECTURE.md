@@ -255,8 +255,9 @@ nào: MockMail sập thì đăng ký vẫn chạy (`otp_sent=false`).
 - Outbox chỉ dùng cho thông báo; nếu Restaurant sập khi checkout, đơn không được tạo (trả 503, giỏ giữ nguyên).
 - Token không làm mới tự động (hết hạn sau `TOKEN_HOURS`, đăng nhập lại); mỗi request cần đăng nhập tốn thêm một lời gọi
   Auth (đánh đổi đã nêu ở trên).
-- Email OTP gửi qua MockMail giả lập, không gửi thư thật; muốn gửi thật chỉ cần đổi `EMAIL_PROVIDER_URL` /
-  `EMAIL_API_KEY` sang nhà cung cấp có cùng kiểu API (và viết lại `buildProviderPayload` nếu khác định dạng).
+- Email OTP mặc định đi qua MockMail giả lập. Điền `EMAIL_SMTP_HOST/USER/PASSWORD` thì MockMail gửi thư thật qua SMTP
+  (kết quả SMTP quyết định webhook `delivered` / `failed`); dùng nhà cung cấp API khác thì đổi `EMAIL_PROVIDER_URL` /
+  `EMAIL_API_KEY` và sửa `buildProviderPayload` nếu khác định dạng. SMTP của Gmail giới hạn khoảng 500 thư / ngày.
 - MockMail lưu thư và bảng idempotency trong bộ nhớ: khởi động lại là mất.
 - `php -S` là máy chủ phát triển của PHP, đủ cho demo; triển khai thật nên dùng PHP-FPM + Nginx/Apache.
 - `node:sqlite` của Node.js 22 còn được Node đánh dấu "experimental" (đã tắt cảnh báo khi chạy).

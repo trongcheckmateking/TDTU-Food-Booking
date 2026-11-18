@@ -24,7 +24,8 @@ EXCLUDE_FILES = [".env", "*.pyc", "*.pyo", "*.db", "*.db-wal", "*.db-shm", "*.sq
                  "Thumbs.db", "*.dot", "*.tmp", "*.swp", "*.mv.db", "*.trace.db", "*.jar", "*.exe", "*.class"]
 TEXT_EXT = {".py", ".md", ".txt", ".json", ".js", ".html", ".css", ".sh", ".ps1", ".ini", ".example", ".svg", ".gitignore",
             ".java", ".go", ".php", ".xml", ".properties", ".sql", ".yml", ".mod", ".sum", ".cmd", ""}
-SECRET_KEYS = ("JWT_SECRET", "INTERNAL_KEY", "POSTGRES_PASSWORD", "EMAIL_API_KEY", "EMAIL_WEBHOOK_SECRET")
+SECRET_KEYS = ("JWT_SECRET", "INTERNAL_KEY", "POSTGRES_PASSWORD", "EMAIL_API_KEY", "EMAIL_WEBHOOK_SECRET",
+               "EMAIL_SMTP_PASSWORD")
 JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
 
 

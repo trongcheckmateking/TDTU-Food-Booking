@@ -246,3 +246,103 @@ def test_startup_requires_api_key(monkeypatch):
         with pytest.raises(RuntimeError):
             with TestClient(mock.app):
                 pass
+
+
+# ---------------------------------------------------------------------------- gửi thư thật qua SMTP (SMTP giả trong test)
+class FakeSMTP:
+    sent: list = []
+    fail: Exception | None = None
+    calls: list = []
+
+    def __init__(self, host, port, timeout=None, context=None):
+        FakeSMTP.calls.append(("connect", host, port, context is not None))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def starttls(self, context=None):
+        FakeSMTP.calls.append(("starttls",))
+
+    def login(self, user, password):
+        FakeSMTP.calls.append(("login", user))
+
+    def send_message(self, msg):
+        if FakeSMTP.fail:
+            raise FakeSMTP.fail
+        FakeSMTP.sent.append(msg)
+
+
+@pytest.fixture
+def smtp(monkeypatch):
+    FakeSMTP.sent, FakeSMTP.fail, FakeSMTP.calls = [], None, []
+    monkeypatch.setenv("EMAIL_SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("EMAIL_SMTP_USER", "tdtufood@example.test")
+    monkeypatch.setenv("EMAIL_SMTP_PASSWORD", "app-password-0123456789")
+    monkeypatch.setattr(mock.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(mock.smtplib, "SMTP_SSL", FakeSMTP)
+    return FakeSMTP
+
+
+def test_smtp_settings_need_host_user_password(monkeypatch):
+    for k in ("EMAIL_SMTP_HOST", "EMAIL_SMTP_USER", "EMAIL_SMTP_PASSWORD", "EMAIL_SMTP_PORT", "EMAIL_SMTP_SECURITY",
+              "EMAIL_SMTP_FROM"):
+        monkeypatch.delenv(k, raising=False)
+    assert mock.smtp_settings() is None
+    monkeypatch.setenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setenv("EMAIL_SMTP_USER", "a@gmail.com")
+    assert mock.smtp_settings() is None                              # thiếu mật khẩu
+    monkeypatch.setenv("EMAIL_SMTP_PASSWORD", "x" * 16)
+    s = mock.smtp_settings()
+    assert (s["host"], s["port"], s["security"], s["from"]) == ("smtp.gmail.com", 587, "starttls", "a@gmail.com")
+    monkeypatch.setenv("EMAIL_SMTP_SECURITY", "ssl")
+    assert mock.smtp_settings()["port"] == 465
+
+
+def test_smtp_sends_real_mail_to_recipient_and_keeps_no_content(client, smtp):
+    r = send(client)
+    assert r.status_code == 202
+    mock.wait_webhooks()
+    assert len(smtp.sent) == 1
+    m = smtp.sent[0]
+    assert m["To"] == BODY["to"] and m["From"] == "tdtufood@example.test" and m["Subject"] == BODY["subject"]
+    assert "042917" in m.get_content()
+    assert ("starttls",) in smtp.calls and ("login", "tdtufood@example.test") in smtp.calls
+    kept = emails(client)[0]
+    assert "042917" not in json.dumps(kept) and kept["status"] == "delivered"      # không giữ mã trong bộ nhớ
+
+
+def test_smtp_failure_reports_failed_webhook_and_no_fake_rules(client, smtp, monkeypatch):
+    monkeypatch.setenv("EMAIL_WEBHOOK_URL", "http://notification.test/internal/webhooks/email-status")
+    posted = []
+
+    class R:
+        status_code = 200
+
+    class S:
+        trust_env = False
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            posted.append(json.loads(data))
+            return R()
+
+    monkeypatch.setattr(mock.requests, "Session", S)
+    smtp.fail = mock.smtplib.SMTPRecipientsRefused({"x": (550, b"no such user")})
+    # trong chế độ gửi thật, địa chỉ bắt đầu bằng "fail" / "bounce" là địa chỉ thật, không bị giả lập lỗi
+    assert send(client, body={**BODY, "to": "fail.nguyen@student.tdtu.edu.vn"}, idem="real-1").status_code == 202
+    mock.wait_webhooks()
+    assert posted[0]["status"] == "failed" and posted[0]["reason"] == "mailbox_not_found"
+    smtp.fail = mock.smtplib.SMTPAuthenticationError(535, b"bad credentials")
+    assert send(client, idem="real-2").status_code == 202
+    mock.wait_webhooks()
+    assert posted[1]["status"] == "failed" and posted[1]["reason"] == "smtp_auth_failed"
+
+
+def test_smtp_log_has_no_code_or_password(client, smtp, caplog):
+    caplog.set_level("INFO", logger="mock_email")
+    send(client, idem="log-smtp")
+    mock.wait_webhooks()
+    assert "042917" not in caplog.text and "app-password-0123456789" not in caplog.text
+    assert "sv***@student.tdtu.edu.vn" in caplog.text

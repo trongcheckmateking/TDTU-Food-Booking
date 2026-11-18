@@ -125,7 +125,10 @@ cung cấp email giả lập MockMail → giao diện hiện form nhập mã →
 báo `EMAIL_NOT_VERIFIED` và mở form nhập mã. Sai 5 lần thì mã bị khóa; gửi lại mã cách nhau tối thiểu 60 giây, tối đa
 5 mã / giờ. Notification hoặc MockMail lỗi thì đăng ký vẫn thành công (`otp_sent=false`), bấm *Gửi lại mã* sau.
 
-**Lấy mã khi demo** (không có email thật): mở `http://127.0.0.1:9000/docs` → **Authorize** (dán `EMAIL_API_KEY` trong
+**Gửi mã tới hộp thư thật:** điền `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD` trong `.env` (Gmail + mật
+khẩu ứng dụng, các bước ở [`docs/DEPLOY.md`](docs/DEPLOY.md)) rồi khởi động lại; đăng ký bằng email thật là nhận được mã.
+
+**Lấy mã khi demo** (chế độ giả lập, không gửi thư thật): mở `http://127.0.0.1:9000/docs` → **Authorize** (dán `EMAIL_API_KEY` trong
 `.env`) → `GET /api/emails` → Try it out (lọc `to` = email vừa đăng ký) → mã 6 số nằm trong trường `content`.
 Giả lập sự cố: `POST /api/_control/mode` với `{"mode": "fail500" | "rate429" | "slow" | "ok"}`; người nhận bắt
 đầu bằng `fail` → provider trả 500, bắt đầu bằng `bounce` → webhook báo `failed`. Admin xem trạng thái thư ở

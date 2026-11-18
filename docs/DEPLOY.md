@@ -74,13 +74,42 @@ docker compose exec auth python -m services.auth.admin_tools --email <email admi
 | `OTP_TTL_SECONDS`, `OTP_MAX_ATTEMPTS` | `300`, `5` | Mã còn hiệu lực bao lâu; nhập sai bao nhiêu lần thì khóa mã |
 | `OTP_RESEND_SECONDS`, `OTP_RESEND_PER_HOUR` | `60`, `5` | Khoảng cách tối thiểu giữa 2 lần gửi mã; số mã tối đa mỗi giờ |
 | `EMAIL_API_KEY`, `EMAIL_WEBHOOK_SECRET` | (sinh ngẫu nhiên) | Khóa API gọi nhà cung cấp email; khóa ký webhook kết quả giao thư |
+| `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD` | `smtp.gmail.com`, … | Điền cả 3 để gửi thư OTP thật (xem hướng dẫn Gmail dưới bảng); trống = giả lập |
 | `EMAIL_PROVIDER_TIMEOUT`, `MOCK_EMAIL_RATE_PER_MINUTE` | `3`, `30` | Thời gian chờ nhà cung cấp email (giây); giới hạn gửi mỗi phút của `mock-email` |
 
-> **Email OTP trên máy chủ chạy thử:** `mock-email` là nhà cung cấp **giả lập**, thư không tới hộp thư thật của người
-> dùng. Khi mở cho người dùng thật: hoặc đặt `OTP_ENABLED=false` (tắt bước xác nhận email), hoặc đổi
-> `EMAIL_PROVIDER_URL`, `EMAIL_API_KEY` sang nhà cung cấp email thật có cùng kiểu API (khác định dạng thì sửa
-> `buildProviderPayload` / `callProvider` trong `services/notification/email.go`) và trỏ webhook của nhà cung cấp về
-> `/internal/webhooks/email-status` của Notification.
+> **Email OTP trên máy chủ chạy thử:** mặc định `mock-email` là nhà cung cấp **giả lập**, thư không tới hộp thư thật.
+> Khi mở cho người dùng thật: hoặc điền `EMAIL_SMTP_*` để gửi thư thật (hướng dẫn ngay dưới bảng), hoặc đặt
+> `OTP_ENABLED=false` (tắt bước xác nhận email), hoặc đổi `EMAIL_PROVIDER_URL`, `EMAIL_API_KEY` sang nhà cung cấp email
+> khác có cùng kiểu API (khác định dạng thì sửa `buildProviderPayload` / `callProvider` trong
+> `services/notification/email.go`) và trỏ webhook của nhà cung cấp về `/internal/webhooks/email-status`.
+
+### Gửi mã OTP thật tới hộp thư người dùng (SMTP)
+
+Mặc định hệ thống chạy ở chế độ **giả lập** (thư chỉ nằm trong MockMail). Muốn mã tới đúng hộp thư của người đăng ký,
+điền cấu hình SMTP trong `.env` rồi khởi động lại (`python manage.py stop`, `python manage.py start`; Docker:
+`docker compose up -d`). Không cần sửa code hay đổi service nào: MockMail nhận thư từ Notification như cũ rồi gửi thật
+qua SMTP và báo `delivered` / `failed` bằng webhook.
+
+Ví dụ dùng Gmail của nhóm:
+
+1. Tài khoản Google → Bảo mật → bật **Xác minh 2 bước**.
+2. Mở <https://myaccount.google.com/apppasswords>, tạo **mật khẩu ứng dụng** (16 ký tự). Không dùng mật khẩu Gmail.
+3. Điền vào `.env` (đúng 3 dòng đầu là bắt buộc; thiếu một dòng thì vẫn là chế độ giả lập):
+
+```ini
+EMAIL_SMTP_HOST=smtp.gmail.com
+EMAIL_SMTP_USER=<địa chỉ gmail gửi thư>
+EMAIL_SMTP_PASSWORD=<mật khẩu ứng dụng 16 ký tự>
+EMAIL_SMTP_PORT=587            # 587 + starttls (mặc định); 465 thì đặt EMAIL_SMTP_SECURITY=ssl
+EMAIL_SMTP_FROM=               # trống = dùng EMAIL_SMTP_USER (Gmail bắt buộc trùng tài khoản)
+```
+
+4. Đăng ký một tài khoản bằng **email thật** của bạn: thư "TDTU Food - Mã xác nhận email" tới sau vài giây (xem cả thư mục
+   Spam). `GET :8004/api/admin/email-logs` hiện `delivered`; sai mật khẩu ứng dụng thì `failed` với lý do `smtp_auth_failed`.
+
+Lưu ý: `EMAIL_SMTP_PASSWORD` là bí mật như `JWT_SECRET`: không commit `.env`, không chụp màn hình, không gửi qua chat.
+Khi gửi thật, MockMail **không giữ nội dung thư** trong bộ nhớ (`GET /api/emails` chỉ còn trạng thái) và không còn giả
+lập địa chỉ `fail*` / `bounce*`. Gmail giới hạn khoảng 500 thư / ngày với tài khoản thường, đủ cho demo và chạy thử.
 
 Không đưa `.env` lên Git hoặc gửi qua chat: tệp chứa khóa ký token và mật khẩu cơ sở dữ liệu.
 

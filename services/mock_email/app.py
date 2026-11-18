@@ -9,6 +9,10 @@ sau gọi webhook có ký HMAC về Notification để báo đã giao (delivered
 - Giới hạn MOCK_EMAIL_RATE_PER_MINUTE yêu cầu / phút / API key -> 429 + Retry-After.
 - Giả lập sự cố: người nhận có phần trước @ bắt đầu bằng "fail" -> 500; "bounce" -> webhook báo failed;
   POST /api/_control/mode đổi cả provider sang fail500 / rate429 / slow (chờ 10 giây) / ok.
+- Gửi THƯ THẬT: đặt EMAIL_SMTP_HOST + EMAIL_SMTP_USER + EMAIL_SMTP_PASSWORD trong .env (ví dụ Gmail + mật khẩu ứng
+  dụng) thì mỗi thư được gửi qua SMTP tới đúng địa chỉ người nhận; kết quả SMTP quyết định webhook delivered / failed.
+  Khi đó nội dung thư (có mã OTP) KHÔNG được lưu trong bộ nhớ, và các quy ước giả lập fail* / bounce* bị tắt.
+  Không cấu hình SMTP thì vẫn là chế độ giả lập như trước (dùng cho test, demo không cần mạng).
 - Dữ liệu chỉ trong bộ nhớ (mất khi khởi động lại), bảo vệ bằng threading.Lock.
 - Log không ghi nội dung thư (có mã OTP), chỉ ghi message_id và email đã che (sv***@domain).
 Chỉ dùng common.config (không dùng common.app.create_app): provider là hệ thống bên ngoài, không theo hợp đồng nội bộ.
@@ -21,12 +25,15 @@ import json
 import logging
 import math
 import re
+import smtplib
+import ssl
 import threading
 import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from typing import Literal
 
 import requests
@@ -58,6 +65,22 @@ def rate_per_minute() -> int:
         return max(1, int(config.get("MOCK_EMAIL_RATE_PER_MINUTE", "30")))
     except ValueError:
         return 30
+
+
+def smtp_settings() -> dict | None:
+    """Cấu hình gửi thư thật; None = chế độ giả lập. Cần đủ HOST + USER + PASSWORD."""
+    host = (config.get("EMAIL_SMTP_HOST") or "").strip()
+    user = (config.get("EMAIL_SMTP_USER") or "").strip()
+    password = config.get("EMAIL_SMTP_PASSWORD") or ""
+    if not (host and user and password):
+        return None
+    security = (config.get("EMAIL_SMTP_SECURITY") or "starttls").strip().lower()
+    try:
+        port = int(config.get("EMAIL_SMTP_PORT") or (465 if security == "ssl" else 587))
+    except ValueError:
+        port = 587
+    return {"host": host, "port": port, "user": user, "password": password, "security": security,
+            "from": (config.get("EMAIL_SMTP_FROM") or user).strip()}
 
 
 def webhook_url() -> str | None:
@@ -165,12 +188,47 @@ class ModeIn(BaseModel):
     mode: Literal["ok", "fail500", "rate429", "slow"]
 
 
+# ---------------------------------------------------------------------------- gửi thư thật (SMTP)
+def send_smtp(settings: dict, to: str, subject: str, content: str) -> str | None:
+    """Gửi một thư qua SMTP. Trả None nếu thành công, hoặc mã lý do ngắn (không chứa nội dung thư / mật khẩu)."""
+    msg = EmailMessage()
+    msg["From"], msg["To"], msg["Subject"] = settings["from"], to, subject
+    msg.set_content(content)
+    try:
+        if settings["security"] == "ssl":
+            smtp = smtplib.SMTP_SSL(settings["host"], settings["port"], timeout=20, context=ssl.create_default_context())
+        else:
+            smtp = smtplib.SMTP(settings["host"], settings["port"], timeout=20)
+        with smtp:
+            if settings["security"] != "ssl" and settings["security"] != "none":
+                smtp.starttls(context=ssl.create_default_context())
+            smtp.login(settings["user"], settings["password"])
+            smtp.send_message(msg)
+        return None
+    except smtplib.SMTPAuthenticationError:
+        return "smtp_auth_failed"
+    except smtplib.SMTPRecipientsRefused:
+        return "mailbox_not_found"
+    except (smtplib.SMTPException, OSError) as e:
+        return "smtp_" + type(e).__name__.lower()
+
+
 # ---------------------------------------------------------------------------- webhook
-def deliver_webhook(email: dict, rid: str) -> None:
-    """Báo kết quả giao thư cho Notification: delivered, hoặc failed nếu hộp thư không tồn tại (bounce...)."""
-    time.sleep(WEBHOOK_DELAY)
-    bounce = email["to"].split("@", 1)[0].lower().startswith("bounce")
-    status, reason = ("failed", "mailbox_not_found") if bounce else ("delivered", None)
+def deliver_webhook(email: dict, rid: str, content: str | None = None) -> None:
+    """Báo kết quả giao thư cho Notification: delivered, hoặc failed (bounce / SMTP lỗi).
+    Có cấu hình SMTP: gửi thư thật rồi báo theo kết quả; không thì giả lập (bounce* -> failed)."""
+    smtp = smtp_settings()
+    if smtp and content is not None:
+        reason = send_smtp(smtp, email["to"], email["subject"], content)
+        status = "failed" if reason else "delivered"
+        if reason:
+            log.warning("Gửi SMTP %s tới %s thất bại: %s rid=%s", email["message_id"], mask_email(email["to"]), reason, rid)
+        else:
+            log.info("Đã gửi SMTP %s tới %s rid=%s", email["message_id"], mask_email(email["to"]), rid)
+    else:
+        time.sleep(WEBHOOK_DELAY)
+        bounce = email["to"].split("@", 1)[0].lower().startswith("bounce")
+        status, reason = ("failed", "mailbox_not_found") if bounce else ("delivered", None)
     with STATE.lock:
         email["status"] = status
     url, secret = webhook_url(), webhook_secret()
@@ -197,8 +255,8 @@ def deliver_webhook(email: dict, rid: str) -> None:
     log.error("Bỏ webhook %s sau %d lần thử rid=%s", email["message_id"], 1 + len(WEBHOOK_RETRY_DELAYS), rid)
 
 
-def start_webhook(email: dict, rid: str) -> None:
-    t = threading.Thread(target=deliver_webhook, args=(email, rid), name="mock-email-webhook", daemon=True)
+def start_webhook(email: dict, rid: str, content: str | None = None) -> None:
+    t = threading.Thread(target=deliver_webhook, args=(email, rid, content), name="mock-email-webhook", daemon=True)
     STATE.threads.append(t)
     t.start()
 
@@ -302,7 +360,8 @@ def _send_sync(rid: str, key: str, idem: str, body: SendIn):
             if prev["hash"] != fingerprint:
                 raise ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency-Key đã dùng cho một email có nội dung khác")
             return JSONResponse(prev["result"], status_code=202, headers={"Idempotent-Replay": "true"})
-        fail = STATE.mode == "fail500" or str(body.to).split("@", 1)[0].lower().startswith("fail")
+        real = smtp_settings() is not None          # gửi thật: không giả lập địa chỉ fail* / bounce*
+        fail = STATE.mode == "fail500" or (not real and str(body.to).split("@", 1)[0].lower().startswith("fail"))
         if fail:                                    # lỗi: không lưu kết quả idempotency, gửi lại sẽ thử lại thật
             log.warning("Từ chối gửi tới %s (giả lập lỗi provider) rid=%s", mask_email(str(body.to)), rid)
             raise ApiError(500, "PROVIDER_ERROR", "Provider gặp lỗi khi gửi email")
@@ -313,7 +372,9 @@ def _send_sync(rid: str, key: str, idem: str, body: SendIn):
             time.sleep(SLOW_SECONDS)
         message_id = "msg_" + uuid.uuid4().hex
         result = {"message_id": message_id, "status": "accepted", "provider": PROVIDER}
-        email = {"message_id": message_id, "to": str(body.to), "subject": body.subject, "content": body.content,
+        # gửi thật: nội dung (có mã OTP) chỉ đi qua SMTP, không giữ lại trong hộp thư của provider
+        email = {"message_id": message_id, "to": str(body.to), "subject": body.subject,
+                 "content": "[đã gửi qua SMTP, không lưu nội dung]" if real else body.content,
                  "tag": body.tag, "status": "accepted", "idempotency_key": idem, "created_at": now_iso()}
         with STATE.lock:
             STATE.emails.append(email)
@@ -323,7 +384,7 @@ def _send_sync(rid: str, key: str, idem: str, body: SendIn):
             STATE.idem.pop(slot, None)
         raise
     log.info("Nhận email %s tới %s (tag=%s) rid=%s", message_id, mask_email(email["to"]), body.tag, rid)
-    start_webhook(email, rid)
+    start_webhook(email, rid, body.content if real else None)
     return JSONResponse(result, status_code=202)
 
 

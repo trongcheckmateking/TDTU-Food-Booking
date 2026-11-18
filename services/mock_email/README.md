@@ -28,5 +28,10 @@ Webhook: `POST {EMAIL_WEBHOOK_URL}` với body thô `{"message_id", "status", "r
 `X-Webhook-Signature: sha256=<hex HMAC-SHA256(EMAIL_WEBHOOK_SECRET, body)>`. Người nhận bắt đầu bằng `bounce` →
 `failed` (`reason: "mailbox_not_found"`). Nhận 404, 5xx hoặc lỗi mạng thì thử lại sau 2, 4, 8 giây.
 
-Lấy mã OTP khi demo: mở `http://127.0.0.1:9000/docs` → **Authorize** (dán `EMAIL_API_KEY`) → `GET /api/emails`.
+**Gửi thư thật qua SMTP:** đặt `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD` (tùy chọn `EMAIL_SMTP_PORT`
+587, `EMAIL_SMTP_SECURITY` `starttls` | `ssl`, `EMAIL_SMTP_FROM`) trong `.env`: mỗi thư được gửi tới đúng người nhận, kết
+quả SMTP quyết định webhook `delivered` / `failed` (`smtp_auth_failed`, `mailbox_not_found`, `smtp_<lỗi>`). Khi đó nội
+dung thư không được lưu trong bộ nhớ và quy ước `fail*` / `bounce*` bị tắt. Hướng dẫn Gmail: `docs/DEPLOY.md`.
+
+Lấy mã OTP khi demo (chế độ giả lập): mở `http://127.0.0.1:9000/docs` → **Authorize** (dán `EMAIL_API_KEY`) → `GET /api/emails`.
 Log không ghi nội dung thư, chỉ ghi `message_id` và email đã che (`sv***@domain`).
