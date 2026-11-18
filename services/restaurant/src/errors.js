@@ -30,7 +30,7 @@ function errorHandler(err, req, res, next) {
   if (err && err.type === 'entity.too.large') {
     return res.status(413).json({ detail: 'Dữ liệu gửi lên quá lớn', code: 'PAYLOAD_TOO_LARGE' });
   }
-  console.error(`[restaurant] Lỗi không mong đợi tại ${req.method} ${req.path}:`, err);
+  console.error(`[restaurant] Lỗi không mong đợi tại ${req.method} ${req.path} rid=${req.rid || '-'}:`, err);
   return res.status(500).json({ detail: 'Có lỗi nội bộ, vui lòng thử lại sau', code: 'INTERNAL_ERROR' });
 }
 

@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -51,8 +52,12 @@ class OrderFlowTest {
     static final Map<String, String> ITEM_STATUS = new ConcurrentHashMap<>(Map.of(ITEM1, "available", ITEM2, "available"));
     static volatile String notificationMode = "ok";
     static volatile boolean payoutMissing = false;
+    static volatile String lastAuthRid = null;          // X-Request-ID mà Auth giả nhận được
     static final String BANK_ACC = "0071000123456";
     static final List<String> EVENTS = Collections.synchronizedList(new ArrayList<>());
+    /** Đúng danh sách enum("event", ...) trong parseEvent của services/notification/handlers.go. */
+    static final Set<String> NOTIFICATION_EVENTS = Set.of("order_created", "order_confirmed", "order_completed",
+            "order_cancelled", "payment_claimed", "payment_confirmed", "payment_refunded");
     static final HttpClient HTTP = HttpClient.newBuilder().proxy(ProxySelector.of(null)).build();
 
     static {
@@ -62,6 +67,7 @@ class OrderFlowTest {
             throw new RuntimeException(e);
         }
         FAKE.createContext("/api/users/me", ex -> {
+            lastAuthRid = ex.getRequestHeaders().getFirst("X-Request-ID");
             String token = String.valueOf(ex.getRequestHeaders().getFirst("Authorization")).replace("Bearer ", "");
             Map<String, String> users = Map.of("sv", SV + "|sinh_vien|Sinh Viên Một", "sv2", SV2 + "|sinh_vien|SV Hai",
                     "owner", OWNER + "|chu_quan|Chủ Quán", "owner2", OWNER2 + "|chu_quan|Chủ Quán 2", "admin", ADMIN + "|admin|Admin");
@@ -119,7 +125,13 @@ class OrderFlowTest {
                 send(ex, 500, "{}");
                 return;
             }
-            EVENTS.add(Json.MAPPER.readTree(body).get("event_key").asText());
+            JsonNode ev = Json.MAPPER.readTree(body);
+            // giống parseEvent của Notification thật (handlers.go): tên sự kiện lạ -> 422, không tạo thông báo
+            if (!NOTIFICATION_EVENTS.contains(ev.path("event").asText())) {
+                send(ex, 422, "{\"detail\":\"Dữ liệu không hợp lệ\",\"code\":\"VALIDATION_ERROR\"}");
+                return;
+            }
+            EVENTS.add(ev.get("event_key").asText());
             send(ex, 201, "{\"created\":1,\"duplicates\":0}");
         });
         FAKE.setExecutor(Executors.newFixedThreadPool(8));
@@ -200,6 +212,26 @@ class OrderFlowTest {
         Res bad = call("GET", "/health", null, null, "Origin", "http://evil.example");
         assertTrue(bad.raw().headers().firstValue("access-control-allow-origin").isEmpty());
         assertEquals("NOT_FOUND", call("GET", "/khong-co", null, null).body().get("code").asText());
+    }
+
+    @Test
+    void xRequestIdTraLaiSinhMoiVaChuyenTiep() throws Exception {
+        Res ok = call("GET", "/api/cart", "sv", null, "X-Request-ID", "demo-rid-0001");
+        assertEquals(200, ok.status());
+        assertEquals("demo-rid-0001", ok.raw().headers().firstValue("X-Request-ID").orElse(null));
+        assertEquals("demo-rid-0001", lastAuthRid);                       // Order -> Auth mang theo rid
+        for (String bad : new String[] {null, "ngan", "co dau cach!!", "x".repeat(129)}) {
+            Res r = bad == null ? call("GET", "/khong-co", null, null) : call("GET", "/khong-co", null, null, "X-Request-ID", bad);
+            assertEquals(404, r.status());
+            assertTrue(r.raw().headers().firstValue("X-Request-ID").orElse("").matches("[0-9a-f]{32}"), String.valueOf(bad));
+        }
+        Res noToken = call("GET", "/api/orders/me", null, null, "X-Request-ID", "demo-rid-0002");   // response lỗi 401
+        assertEquals(401, noToken.status());
+        assertEquals("demo-rid-0002", noToken.raw().headers().firstValue("X-Request-ID").orElse(null));
+        Res pre = call("OPTIONS", "/health", null, null, "Origin", "http://127.0.0.1:8000", "Access-Control-Request-Method", "GET");
+        assertTrue(pre.raw().headers().firstValue("X-Request-ID").orElse("").matches("[0-9a-f]{32}"));
+        assertTrue(pre.raw().headers().firstValue("Access-Control-Expose-Headers").orElse("").contains("X-Request-ID"));
+        assertNull(org.slf4j.MDC.get("rid"));                              // không rò rỉ sang luồng khác
     }
 
     @Test
@@ -599,5 +631,142 @@ class OrderFlowTest {
         String adm = call("GET", "/api/admin/orders?payment_status=expired,void&page_size=100", "admin", null).body().toString();
         assertTrue(adm.contains(late) && adm.contains(drop) && !adm.contains(oid));
         assertEquals(422, call("GET", "/api/admin/orders?payment_status=paid,da_tra", "admin", null).status());
+    }
+
+    @Test
+    void donTienMatBaoChuQuanNgayVaThuTienKhiHoanThanh() throws Exception {
+        call("DELETE", "/api/cart", "sv2", null);
+        addToCart("sv2", ITEM1, 1);
+        Res r = call("POST", "/api/orders/checkout", "sv2",
+                "{\"delivery_address\":\"KTX B305\",\"payment_method\":\"cash\"}");
+        assertEquals(201, r.status(), String.valueOf(r.body()));
+        String oid = r.body().get("id").asText();
+        assertEquals("pending", r.body().get("status").asText());
+        assertEquals("cash", r.body().get("payment").get("method").asText());
+        assertEquals("cash", r.body().get("payment").get("status").asText());
+        assertTrue(r.body().get("payment").get("account").isNull(), "tiền mặt: không cần tài khoản nhận tiền");
+        // đơn tiền mặt tới quán ngay: Notification nhận đúng sự kiện order_created và mọi sự kiện đã gửi xong
+        assertTrue(EVENTS.contains(oid + ":order_created"), EVENTS.toString());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM notification_outbox WHERE order_id=? AND status<>'sent'",
+                Integer.class, oid));
+
+        // luật Payment: cash --quán xác nhận--> vẫn cash (chưa thu tiền) --quán báo hoàn thành--> paid
+        String url = "/api/orders/" + oid + "/status";
+        Res c = call("PATCH", url, "owner", "{\"status\":\"confirmed\"}");
+        assertEquals(200, c.status(), String.valueOf(c.body()));
+        assertEquals("cash", c.body().get("payment").get("status").asText());
+        assertTrue(c.body().get("payment").get("paid_at").isNull());
+        Res done = call("PATCH", url, "owner", "{\"status\":\"completed\"}");
+        assertEquals(200, done.status(), String.valueOf(done.body()));
+        assertEquals("completed", done.body().get("status").asText());
+        assertEquals("paid", done.body().get("payment").get("status").asText());
+        assertFalse(done.body().get("payment").get("paid_at").isNull());
+        assertTrue(EVENTS.contains(oid + ":order_confirmed") && EVENTS.contains(oid + ":order_completed"));
+    }
+
+    @Test
+    void muoiLuongCungIdempotencyKeyDungMot201ConLaiCungDon() throws Exception {
+        call("DELETE", "/api/cart", "sv2", null);
+        addToCart("sv2", ITEM2, 1);
+        String key = UUID.randomUUID().toString();
+        ExecutorService pool = Executors.newFixedThreadPool(10);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        List<Future<Res>> fs = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            fs.add(pool.submit(() -> {
+                go.await();
+                return call("POST", "/api/orders/checkout", "sv2", "{\"delivery_address\":\"KTX B305\"}", "Idempotency-Key", key);
+            }));
+        }
+        go.countDown();
+        int created = 0;
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (Future<Res> f : fs) {
+            Res r = f.get();
+            assertTrue(r.status() == 201 || (r.status() == 200
+                    && "true".equals(r.raw().headers().firstValue("Idempotent-Replay").orElse(""))), r.status() + " " + r.body());
+            created += r.status() == 201 ? 1 : 0;
+            ids.add(r.body().get("id").asText());
+        }
+        pool.shutdown();
+        assertEquals(1, created);
+        assertEquals(1, ids.size());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM orders WHERE idempotency_key=?", Integer.class, key));
+    }
+
+    @Test
+    void notificationStatusFailedKhiNotificationSapRoiSentSauKhiGuiLai() throws Exception {
+        // đơn chuyển khoản chưa trả tiền: chưa có sự kiện nào -> none
+        call("DELETE", "/api/cart", "sv", null);
+        addToCart("sv", ITEM2, 1);
+        String unpaid = checkout("sv", null);
+        assertEquals("none", call("GET", "/api/orders/" + unpaid, "sv", null).body().get("notification_status").asText());
+
+        // Notification sập ngay lúc tạo đơn tiền mặt: đơn vẫn 201, notification_status = failed
+        addToCart("sv", ITEM2, 1);
+        notificationMode = "down";
+        Res r = call("POST", "/api/orders/checkout", "sv", "{\"delivery_address\":\"KTX B305\",\"payment_method\":\"cash\"}");
+        notificationMode = "ok";
+        assertEquals(201, r.status(), String.valueOf(r.body()));
+        String oid = r.body().get("id").asText();
+        assertEquals("failed", r.body().get("notification_status").asText());
+        assertEquals("failed", call("GET", "/api/orders/" + oid, "owner", null).body().get("notification_status").asText());
+        // danh sách đơn không có trường này (chỉ API trả một đơn)
+        JsonNode list = call("GET", "/api/orders/me?page_size=100", "sv", null).body().get("items");
+        assertTrue(list.size() > 0 && !list.get(0).has("notification_status"));
+
+        jdbc.update("UPDATE notification_outbox SET status='pending' WHERE order_id=?", oid);
+        assertEquals("pending", call("GET", "/api/orders/" + oid, "sv", null).body().get("notification_status").asText());
+        jdbc.update("UPDATE notification_outbox SET status='failed' WHERE order_id=?", oid);
+
+        // admin gửi lại -> sent; PATCH trạng thái cũng trả notification_status
+        assertTrue(call("POST", "/api/admin/outbox/retry", "admin", null).body().get("sent").asInt() >= 1);
+        assertTrue(EVENTS.contains(oid + ":order_created"));
+        assertEquals("sent", call("GET", "/api/orders/" + oid, "sv", null).body().get("notification_status").asText());
+        Res c = call("PATCH", "/api/orders/" + oid + "/status", "owner", "{\"status\":\"confirmed\"}");
+        assertEquals("sent", c.body().get("notification_status").asText());
+        // API nội bộ giữ nguyên dạng cũ (không có notification_status)
+        assertFalse(call("GET", "/internal/orders/" + oid, null, null, "X-Internal-Key", KEY).body().has("notification_status"));
+    }
+
+    @Autowired
+    javax.sql.DataSource dataSource;
+
+    @Test
+    void schemaSqlSuaSuKienTienMatCuChuaGuiDuoc() throws Exception {
+        // dữ liệu do bản cũ ghi: sự kiện "order_created_cash" bị Notification trả 422, nằm ở trạng thái failed
+        String old = UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO orders (id,user_id,customer_name,restaurant_id,restaurant_name,restaurant_owner_id,status,"
+                + "total_price,delivery_address,created_at,updated_at,payment_method,payment_status) VALUES (?,?,?,?,?,?,"
+                + "'pending',3000,'Cổng C','2026-11-01T03:00:00Z','2026-11-01T03:00:00Z','cash','cash')",
+                old, SV, "SV", RID, "Quán Test", OWNER);
+        String payload = "{\"event_key\":\"" + old + ":order_created_cash\",\"event\":\"order_created_cash\",\"order_id\":\""
+                + old + "\",\"order_code\":\"001\",\"student_id\":\"" + SV + "\",\"owner_id\":\"" + OWNER
+                + "\",\"restaurant_name\":\"Quán Test\",\"actor_role\":\"sinh_vien\"}";
+        jdbc.update("INSERT INTO notification_outbox (id,event_key,order_id,payload,status,attempts,last_error,next_attempt_at,"
+                + "created_at) VALUES (?,?,?,?,'failed',4,'HTTP_422: x','2099-01-01T00:00:00Z','2026-11-01T03:00:00Z')",
+                UUID.randomUUID().toString(), old + ":order_created_cash", old, payload);
+
+        // chạy lại schema.sql như lúc Order khởi động (chạy nhiều lần không hỏng dữ liệu)
+        for (int i = 0; i < 2; i++) {
+            try (java.sql.Connection conn = dataSource.getConnection()) {
+                org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(conn,
+                        new org.springframework.core.io.support.EncodedResource(
+                                new org.springframework.core.io.ClassPathResource("schema.sql"), StandardCharsets.UTF_8));
+            }
+        }
+        Map<String, Object> row = jdbc.queryForMap("SELECT * FROM notification_outbox WHERE order_id=?", old);
+        assertEquals(old + ":order_created", row.get("EVENT_KEY"));
+        assertEquals("pending", row.get("STATUS"));
+        assertEquals(0, ((Number) row.get("ATTEMPTS")).intValue());
+        assertNull(row.get("LAST_ERROR"));
+        assertEquals("2026-11-01T03:00:00Z", row.get("NEXT_ATTEMPT_AT"));
+        JsonNode fixed = Json.MAPPER.readTree((String) row.get("PAYLOAD"));
+        assertEquals("order_created", fixed.get("event").asText());
+        assertEquals(old + ":order_created", fixed.get("event_key").asText());
+
+        // worker / admin gửi lại -> lần này Notification nhận và chủ quán được báo
+        assertTrue(call("POST", "/api/admin/outbox/retry", "admin", null).body().get("sent").asInt() >= 1);
+        assertTrue(EVENTS.contains(old + ":order_created"), EVENTS.toString());
     }
 }

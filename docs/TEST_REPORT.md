@@ -32,18 +32,18 @@ Ngày chạy: 07/10/2026. Mọi kết quả dưới đây là kết quả thực
 
 ## Bộ test tự động
 
-Số test theo lần chạy mới nhất (16/10/2026, mục S1–S7 bên dưới).
+Số test theo lần chạy mới nhất (17/11/2026, bản cuối kỳ, mục F1–F14 bên dưới).
 
 | Nhóm | Số test | Nội dung | Cách chạy |
 | --- | --- | --- | --- |
-| Restaurant – `node --test` | 12 | health/CORS/404, duyệt quán, kiểm tra dữ liệu, quyền, món ẩn/hết, khóa, xóa mềm, báo giá, lỗi Auth (Auth giả) | `npm test` |
-| Order – JUnit 5 | 20 | `OrderStatusTest` (của TV3), `JsonTest`, `OrderFlowTest` (Spring Boot thật + H2 + server giả: giỏ, checkout chống trùng, đồng thời, outbox gửi lại) | `mvn test` |
-| Notification – `go test` | 5 | người nhận, kiểm tra sự kiện, ánh xạ lỗi, tích hợp PostgreSQL thật | `go test .` |
-| Review – `php tests/run.php` | 50 kiểm tra | điều kiện đánh giá, dữ liệu sai, trùng, điểm TB half-up, ẩn/hiện, lỗi Order/Auth | `php tests/run.php` |
-| `tests/unit` (Python) | 28 | ánh xạ lỗi REST của Auth, dừng khi thiếu JWT_SECRET, OpenAPI Auth | `pytest tests/unit` |
-| `tests/integration` | 67 | **5 tiến trình thật, 5 ngôn ngữ**; lời gọi giữa service đi qua fault proxy giả lập sập/timeout/500/JSON hỏng; DB tạm + schema PostgreSQL tạm | `pytest tests/integration` |
-| `tests/e2e` | 3 | khởi động bằng đúng `manage.py start`; luồng đầy đủ, restart, Notification sập rồi tự gửi bù | `pytest tests/e2e` |
-| `tests/ui` | 4 | Playwright 3 vai trò trên hệ thống đang chạy, lỗi console/5xx, màn hình 390 px | `pytest tests/ui` |
+| Restaurant – `node --test` | 13 | health/CORS/404, duyệt quán, kiểm tra dữ liệu, quyền, món ẩn/hết, khóa, xóa mềm, báo giá, lỗi Auth (Auth giả) | `npm test` |
+| Order – JUnit 5 | 28 | `OrderStatusTest` (của TV3), `JsonTest`, `OrderFlowTest` (Spring Boot thật + H2 + server giả: giỏ, checkout chống trùng, đồng thời, outbox gửi lại) | `mvn test` |
+| Notification – `go test` | 15 | người nhận, kiểm tra sự kiện, ánh xạ lỗi, email qua nhà cung cấp, webhook HMAC, X-Request-ID, tích hợp PostgreSQL thật | `go test .` |
+| Review – `php tests/run.php` | 57 kiểm tra | điều kiện đánh giá, dữ liệu sai, trùng, điểm TB half-up, ẩn/hiện, lỗi Order/Auth | `php tests/run.php` |
+| `tests/unit` (Python) | 52 | ánh xạ lỗi REST của Auth, dừng khi thiếu JWT_SECRET, OpenAPI Auth, MockMail (16), X-Request-ID, sao lưu, VietQR | `pytest tests/unit` |
+| `tests/integration` | 101 | **5 tiến trình thật, 5 ngôn ngữ**; lời gọi giữa service đi qua fault proxy giả lập sập/timeout/500/JSON hỏng; DB tạm + schema PostgreSQL tạm | `pytest tests/integration` |
+| `tests/e2e` | 4 | khởi động bằng đúng `manage.py start`; luồng đầy đủ, restart, Notification sập rồi tự gửi bù | `pytest tests/e2e` |
+| `tests/ui` | 7 | Playwright 3 vai trò trên hệ thống đang chạy, lỗi console/5xx, màn hình 390 px | `pytest tests/ui` |
 
 Nội dung chính của test liên service (tên đầy đủ trong `REQUIREMENTS.md`):
 
@@ -240,6 +240,42 @@ Lỗi phát hiện và đã sửa trong lúc làm: sinh viên đã báo chuyển
 hủy được, đơn chuyển sang chờ hoàn tiền; danh sách "Đơn của tôi" không tự cập nhật khi quán xác nhận tiền → tự làm mới
 khi còn đơn ở bước thanh toán; số tài khoản bị xuống dòng trên điện thoại → nút Chép chỉ còn biểu tượng.
 
+## Bản cuối kỳ SOA (17/11/2026, Windows 11, nhánh `fix/final-soa`)
+
+Thêm: xác nhận email bằng OTP (Auth) + nhà cung cấp email giả lập MockMail + gửi email / webhook ký HMAC (Notification),
+OAuth2 form cho Swagger (Unit 18), sửa đơn tiền mặt không báo được chủ quán, `notification_status`, checkout đồng thời
+cùng khóa trả lại đúng đơn, `X-Request-ID` xuyên 5 service, sơ đồ kiến trúc. Chi tiết: [`CHANGELOG_FINAL.md`](CHANGELOG_FINAL.md).
+Mọi số liệu dưới đây là kết quả thực tế của lệnh, chạy trên commit `9ea466a` (phase 8) sau `python manage.py build --force`.
+
+| Mục | Giá trị |
+| --- | --- |
+| Hệ điều hành | Windows 11 Pro 10.0.26200 |
+| Runtime | Python 3.12.6, Node.js 26.13.0, OpenJDK 21.0.10, Go 1.27.0, PHP 8.5.11 |
+| PostgreSQL | 16.16 bằng Docker Desktop 29.8.2 (`docker-compose.postgres.yml`) |
+| Trình duyệt | Chromium headless qua Playwright 1.56.0 |
+
+| # | Lệnh | Kết quả |
+| --- | --- | --- |
+| F1 | `python manage.py build --force` | npm ci, go build, `mvnw -DskipTests package`: **Build xong** |
+| F2 | `pytest tests/unit tests/integration tests/e2e -q` | **157 passed**, 0 failed, 0 skipped (311 s). Hệ thống tạm: 5 service + MockMail, DB tạm + schema PostgreSQL tạm |
+| F3 | `mvnw.cmd test` (Order) | **28/28 đạt**: `OrderFlowTest` 15, `InternalOpsTest` 3, `OrderStatusTest` 5, `JsonTest` 5 |
+| F4 | `go test -count=1 .` (Notification, PostgreSQL thật, `NOTIFICATION_TEST_DB_URL`) | **15/15 đạt** (gồm email, webhook, X-Request-ID) |
+| F5 | `npm test` (Restaurant) | **13/13 đạt** |
+| F6 | `php tests/run.php` (Review) | **57 đạt, 0 lỗi** |
+| F7 | `manage.py start` + `seed` trên thư mục dữ liệu / log tạm (không đụng `data/` của máy) | 7 tiến trình OK; seed: 6 user, 4 quán, 10 món, 7 đơn, 2 đánh giá |
+| F8 | `python scripts/smoke_test.py` | **ĐẠT**, 32 bước (có đăng ký → bị chặn đăng nhập → đọc mã MockMail → xác nhận; đơn tiền mặt `notification_status = sent`) |
+| F9 | `python scripts/demo_concurrency.py` | **ĐẠT**: 1a cùng khóa 201 × 1 + 200 × 9, 1 đơn; 1b không khóa 201 × 1 + 409 `CART_CHANGED` × 9, 1 đơn; 2 hoàn thành + hủy cùng lúc 200 × 1 + 409 `STATUS_CHANGED` × 1 |
+| F10 | `pytest tests/ui -q` (OTP bật) | **7 passed** (27 s), gồm sai mã / gửi lại mã / màn hình 390 px, đăng nhập tài khoản chưa xác nhận mở ô nhập mã |
+| F11 | Tìm mã OTP trong log: lấy **10 mã** đã gửi trong lần chạy F7–F10 từ hộp thư MockMail, tìm từng mã (6 số đứng riêng) trong 7 tệp log (137 KB) | **0 lần xuất hiện**. Script chỉ in số lượng, không in mã |
+| F12 | `docker compose -p tdtu-food-verify up -d --build --wait` (project riêng, cổng 18080/18443/19000, không đụng stack đang dùng) | 10 container lên trong 195 s, 9 container có healthcheck đều **healthy** (gồm `mock-email`); `backup` không có healthcheck, "Up" |
+| F13 | Qua gateway `https://localhost:18443/svc/auth` | đăng ký 201 (`verification_required`, `otp_sent = true`, có `X-Request-ID`); đăng nhập trước khi xác nhận 403 `EMAIL_NOT_VERIFIED`; MockMail nhận 1 thư có mã; `verify-otp` 200, `email_verified_at` có giá trị; webhook về Notification 200; `/svc/notification/internal/...` qua gateway 404. Sau đó `down -v` project kiểm tra |
+| F14 | `scripts/package_release.py --out <thư mục tạm>` | 286 tệp, không có `.env`, `data/`, `logs/`, `.run/`, `backups/`, `__pycache__`, `target/`, `bin/`, `.jar/.exe/.class/.db/.log`; quét khóa bí mật (gồm `EMAIL_API_KEY`, `EMAIL_WEBHOOK_SECRET`) không phát hiện |
+
+Ghi chú:
+- Lần gọi `mvnw.cmd` đầu tiên từ Git Bash qua `cmd //c` không chạy được (cmd không tìm thấy tệp) nhưng thư mục
+  `target/surefire-reports` còn báo cáo cũ; đã xóa báo cáo cũ và chạy lại bằng PowerShell, kết quả F3 là của lần chạy mới.
+- Postman (thư mục "OTP." mới) chưa chạy bằng newman trên máy này.
+
 ## Chưa kiểm được
 
 | Mục | Lý do | Cách tự kiểm |
@@ -250,5 +286,7 @@ khi còn đơn ở bước thanh toán; số tài khoản bị xuống dòng tr�
 | Node.js 24, Java 17 đúng phiên bản (đã chạy trên Java 21), Go 1.22, PHP 8.1 | Chỉ có một phiên bản mỗi runtime | Chạy `python manage.py doctor` + test trên máy có phiên bản đó |
 | Docker trên máy chủ Linux thật, tên miền + Let's Encrypt | Mới chạy trên Docker Desktop (Windows) với chứng chỉ tự ký | Làm theo `docs/DEPLOY.md` mục 3–4, chạy `smoke_test.py` qua tên miền |
 | Trình duyệt khác Chromium | Chỉ có Chromium | Làm theo `DEMO.md` |
+| Gửi email thật | Chỉ có MockMail giả lập | Nối nhà cung cấp thật theo `DEPLOY.md` mục 3, đăng ký thử |
+| Postman thư mục OTP bằng newman | Máy không cài newman | `npx newman run docs/postman/... --folder "OTP. Xác nhận email (Unit 20) + OAuth2 (Unit 18)"` (điền `email_api_key`) |
 | Hiệu năng / tải lớn | Ngoài phạm vi; không công bố số đo hiệu năng | – |
 | Quét mã VietQR bằng app ngân hàng thật | Môi trường kiểm thử không có app ngân hàng; đã kiểm chuỗi theo chuẩn EMVCo và CRC | Chủ quán khai báo tài khoản thật, quét mã trên trang thanh toán bằng app ngân hàng, kiểm tra app điền đúng tên chủ tài khoản, số tiền, nội dung |

@@ -4,7 +4,9 @@
 Thư mục "0. Luồng demo" chạy theo thứ tự trên dữ liệu seed (có test tự kiểm tra), ví dụ:
   npx newman run docs/postman/TDTU_FoodBooking.postman_collection.json \
       -e docs/postman/TDTU_FoodBooking.local.postman_environment.json --folder "0. Luồng demo"
-Các thư mục còn lại liệt kê mọi endpoint của từng service. Không lưu token thật: token được lấy khi chạy.
+Thư mục "OTP. ..." chạy luồng xác nhận email (cần OTP_ENABLED=true, biến email_api_key = EMAIL_API_KEY trong .env).
+Các thư mục còn lại liệt kê mọi endpoint của từng service và MockMail. Không lưu token / khóa thật: token được lấy khi
+chạy, khóa tự điền vào environment.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs" / "postman"
-SERVICES = ["auth", "restaurant", "order", "notification", "review"]
+SERVICES = ["auth", "restaurant", "order", "notification", "review", "mock_email"]
 SAMPLE = {"name": "Tên mẫu", "email": "sv.moi@student.tdtu.edu.vn", "password": "matkhau123", "role": "sinh_vien",
           "address": "19 Nguyễn Hữu Thọ, Q7", "price": 30000, "quantity": 1, "rating": 5, "comment": "Ngon",
           "delivery_address": "KTX TDTU, phòng B305", "status": "cancelled", "reason": "Lý do mẫu",
@@ -22,7 +24,8 @@ SAMPLE = {"name": "Tên mẫu", "email": "sv.moi@student.tdtu.edu.vn", "password
 
 
 def token_for(path: str, tags: list[str]) -> str | None:
-    if path.startswith("/internal") or path in ("/api/users/register", "/api/users/login", "/", "/health"):
+    if path.startswith("/internal") or path in ("/api/users/register", "/api/users/login", "/api/users/token",
+                                                "/api/users/verify-otp", "/api/users/resend-otp", "/", "/health"):
         return None
     if "admin" in tags or path.startswith("/api/admin") or path.startswith("/api/users/{"):
         return "token_admin"
@@ -132,6 +135,79 @@ pm.test("mã lỗi", () => pm.expect(pm.response.json().code).to.eql("UNAUTHORIZ
     return {"name": "0. Luồng demo", "item": items}
 
 
+def otp_flow() -> dict:
+    """Xác nhận email bằng OTP (Unit 20) + đăng nhập form OAuth2 (Unit 18). Cần hệ thống chạy với OTP_ENABLED=true và
+    biến email_api_key (giá trị EMAIL_API_KEY trong .env) để đọc hộp thư MockMail. Mã chỉ lưu vào biến, không in ra."""
+    reg = """
+pm.test("201", () => pm.response.to.have.status(201));
+const u = pm.response.json();
+pm.test("chưa xác nhận, đã gửi mã", () => { pm.expect(u.verification_required).to.be.true;
+  pm.expect(u.otp_sent).to.be.true; pm.expect(u.email_verified_at).to.be.null; });
+pm.collectionVariables.set("otp_user_id", u.id);"""
+    read_code = """
+pm.test("200", () => pm.response.to.have.status(200));
+const it = pm.response.json().items[0];
+pm.test("có thư mã xác nhận", () => pm.expect(it).to.be.ok);
+const m = /\\b(\\d{6})\\b/.exec(it.content);
+pm.test("thư có mã 6 số", () => pm.expect(m).to.be.ok);
+const code = m[1];                      // không console.log mã
+pm.collectionVariables.set("otp_code", code);
+pm.collectionVariables.set("otp_wrong", code === "000000" ? "111111" : "000000");"""
+    token_form = req("8. Đăng nhập form OAuth2 (username = email) - Unit 18", "POST", "auth", "/api/users/token", tests="""
+pm.test("200", () => pm.response.to.have.status(200));
+pm.test("có access_token", () => pm.expect(pm.response.json().access_token).to.be.a("string"));""")
+    token_form["request"]["body"] = {"mode": "urlencoded", "urlencoded": [
+        {"key": "username", "value": "{{otp_email}}"}, {"key": "password", "value": "{{demo_password}}"}]}
+    items = [
+        req("1. Đăng ký sinh viên mới (email ngẫu nhiên)", "POST", "auth", "/api/users/register",
+            body={"name": "Sinh Viên OTP", "email": "{{otp_email}}", "password": "{{demo_password}}",
+                  "role": "sinh_vien", "accept_terms": True},
+            prerequest='pm.collectionVariables.set("otp_email", "sv.otp." + pm.variables.replaceIn("{{$guid}}").slice(0, 8) + "@demo.tdtu.vn");',
+            tests=reg),
+        req("2. Đăng nhập khi chưa xác nhận -> 403 EMAIL_NOT_VERIFIED", "POST", "auth", "/api/users/login",
+            body={"email": "{{otp_email}}", "password": "{{demo_password}}"}, tests="""
+pm.test("403", () => pm.response.to.have.status(403));
+pm.test("EMAIL_NOT_VERIFIED", () => pm.expect(pm.response.json().code).to.eql("EMAIL_NOT_VERIFIED"));"""),
+        req("3. Đọc mã trong hộp thư MockMail", "GET", "mock_email", "/api/emails?to={{otp_email}}&limit=1",
+            headers={"X-API-Key": "{{email_api_key}}"}, tests=read_code),
+        req("4. Nhập sai mã -> 400 OTP_INVALID", "POST", "auth", "/api/users/verify-otp",
+            body={"email": "{{otp_email}}", "code": "{{otp_wrong}}"}, tests="""
+pm.test("400", () => pm.response.to.have.status(400));
+pm.test("OTP_INVALID + số lần còn lại", () => { const j = pm.response.json();
+  pm.expect(j.code).to.eql("OTP_INVALID"); pm.expect(j.remaining_attempts).to.be.a("number"); });"""),
+        req("5. Nhập đúng mã -> 200, nhận token", "POST", "auth", "/api/users/verify-otp",
+            body={"email": "{{otp_email}}", "code": "{{otp_code}}"}, tests="""
+pm.test("200", () => pm.response.to.have.status(200));
+pm.test("đã xác nhận", () => pm.expect(pm.response.json().user.email_verified_at).to.be.a("string"));"""),
+        req("6. Nhập lại mã -> 409 ALREADY_VERIFIED", "POST", "auth", "/api/users/verify-otp",
+            body={"email": "{{otp_email}}", "code": "{{otp_code}}"}, tests="""
+pm.test("409 ALREADY_VERIFIED", () => { pm.response.to.have.status(409);
+  pm.expect(pm.response.json().code).to.eql("ALREADY_VERIFIED"); });"""),
+        req("7. Gửi lại mã khi đã xác nhận -> 202, không gửi", "POST", "auth", "/api/users/resend-otp",
+            body={"email": "{{otp_email}}"}, tests="""
+pm.test("202", () => pm.response.to.have.status(202));
+pm.test("không gửi thư", () => pm.expect(pm.response.json().otp_sent).to.be.false);"""),
+        token_form,
+        req("9. Không có token -> 401 + WWW-Authenticate: Bearer", "GET", "auth", "/api/users/me", tests="""
+pm.test("401", () => pm.response.to.have.status(401));
+pm.test("WWW-Authenticate", () => pm.expect(pm.response.headers.get("WWW-Authenticate")).to.eql("Bearer"));"""),
+        req("10. Đăng nhập admin", "POST", "auth", "/api/users/login",
+            body={"email": "{{admin_email}}", "password": "{{admin_password}}"}, tests="""
+pm.test("200", () => pm.response.to.have.status(200));
+pm.collectionVariables.set("token_admin", pm.response.json().access_token);"""),
+        req("11. Admin xem nhật ký email (không có mã OTP)", "GET", "notification",
+            "/api/admin/email-logs?user_id={{otp_user_id}}", token="token_admin", tests="""
+pm.test("200", () => pm.response.to.have.status(200));
+const items = pm.response.json().items;
+pm.test("có thư mã xác nhận đã gửi", () => { pm.expect(items.length).to.be.above(0);
+  pm.expect(["sent", "delivered"]).to.include(items[0].status); });
+pm.test("không lộ mã", () => pm.expect(JSON.stringify(items)).to.not.include(pm.collectionVariables.get("otp_code")));"""),
+    ]
+    return {"name": "OTP. Xác nhận email (Unit 20) + OAuth2 (Unit 18)",
+            "description": "Cần OTP_ENABLED=true và biến môi trường email_api_key (= EMAIL_API_KEY trong .env).",
+            "item": items}
+
+
 def service_folders() -> list[dict]:
     folders = []
     for svc in SERVICES:
@@ -149,8 +225,16 @@ def service_folders() -> list[dict]:
                 if rb:
                     body = sample_body(rb, comps)
                 headers = {"X-Internal-Key": "{{internal_key}}"} if path.startswith("/internal") else None
+                token, prerequest = token_for(path, op.get("tags", [])), None
+                if path == "/internal/webhooks/email-status":     # webhook ký HMAC, không dùng X-Internal-Key
+                    headers, prerequest = {}, 'pm.request.headers.upsert({key: "X-Webhook-Signature", value: "sha256=" + CryptoJS.HmacSHA256(pm.request.body.raw, pm.environment.get("email_webhook_secret") || "").toString()});'
+                if svc == "mock_email":                          # nhà cung cấp email: khóa API riêng, không Bearer
+                    token = None
+                    headers = {"X-API-Key": "{{email_api_key}}"} if path != "/health" else None
+                    if path == "/api/send":
+                        headers["Idempotency-Key"] = "{{$guid}}"
                 items.append(req(f"{method.upper()} {path} – {op.get('summary', '')}", method.upper(), svc, p,
-                                 token=token_for(path, op.get("tags", [])), body=body, headers=headers))
+                                 token=token, body=body, headers=headers, prerequest=prerequest))
         folders.append({"name": f"{SERVICES.index(svc) + 1}. {spec['info']['title']}", "item": items})
     return folders
 
@@ -160,18 +244,20 @@ def main():
     collection = {
         "info": {"name": "TDTU Food Booking", "description": "Sinh từ OpenAPI bằng scripts/build_postman.py",
                  "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
-        "item": [demo_flow(), *service_folders()],
+        "item": [demo_flow(), otp_flow(), *service_folders()],
         "variable": [{"key": k, "value": ""} for k in ("token_sv", "token_owner", "token_admin", "restaurant_id",
                                                        "item_id", "item_price", "order_id", "checkout_key", "user_id",
-                                                       "notification_id", "review_id")],
+                                                       "notification_id", "review_id", "otp_email", "otp_user_id",
+                                                       "otp_code", "otp_wrong")],
     }
     env = {"name": "TDTU Food Booking - local", "values": [
         {"key": k, "value": v, "enabled": True} for k, v in {
             "auth_url": "http://127.0.0.1:8001", "restaurant_url": "http://127.0.0.1:8002",
             "order_url": "http://127.0.0.1:8003", "notification_url": "http://127.0.0.1:8004",
-            "review_url": "http://127.0.0.1:8005", "sv_email": "sv1@demo.tdtu.vn", "owner_email": "chuquan1@demo.tdtu.vn",
+            "review_url": "http://127.0.0.1:8005", "mock_email_url": "http://127.0.0.1:9000",
+            "sv_email": "sv1@demo.tdtu.vn", "owner_email": "chuquan1@demo.tdtu.vn",
             "admin_email": "admin@demo.tdtu.vn", "demo_password": "Demo@123", "admin_password": "Admin@123",
-            "internal_key": ""}.items()]}
+            "internal_key": "", "email_api_key": "", "email_webhook_secret": ""}.items()]}
     (OUT / "TDTU_FoodBooking.postman_collection.json").write_text(json.dumps(collection, ensure_ascii=False, indent=2), encoding="utf-8")
     (OUT / "TDTU_FoodBooking.local.postman_environment.json").write_text(json.dumps(env, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Đã tạo", OUT)

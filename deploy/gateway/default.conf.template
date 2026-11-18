@@ -93,6 +93,23 @@ server {
         error_page 502 503 504 = @unavailable;
         proxy_pass http://tdtu_auth/api/users/register;
     }
+    # Mã OTP 6 số: chung giới hạn với đăng nhập để không dò mã được (Auth còn khóa mã sau OTP_MAX_ATTEMPTS lần sai)
+    location = /svc/auth/api/users/verify-otp {
+        limit_req zone=tdtu_login burst=60 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_auth/api/users/verify-otp;
+    }
+    location = /svc/auth/api/users/resend-otp {
+        limit_req zone=tdtu_login burst=60 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_auth/api/users/resend-otp;
+    }
+    # Đăng nhập dạng form OAuth2 (Unit 18): cùng giới hạn với /login
+    location = /svc/auth/api/users/token {
+        limit_req zone=tdtu_login burst=60 nodelay;
+        error_page 502 503 504 = @unavailable;
+        proxy_pass http://tdtu_auth/api/users/token;
+    }
     location = /svc/restaurant/api/uploads {
         limit_req zone=tdtu_upload burst=10 nodelay;
         error_page 502 503 504 = @unavailable;

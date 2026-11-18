@@ -78,6 +78,16 @@
                 <a href="quyen-rieng-tu.html" target="_blank" rel="noopener">Chính sách quyền riêng tư</a></span></label>
             <button class="primary" style="width:100%;margin-top:18px;min-height:44px" type="submit">Tạo tài khoản</button>
           </form>
+          <form id="fOtp" class="hidden" novalidate>
+            <div class="field"><label for="oEmail">Email</label><input id="oEmail" type="email" autocomplete="email" readonly></div>
+            <div class="field"><label for="oCode">Mã xác nhận (6 chữ số trong email)</label>
+              <input id="oCode" class="otp-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></div>
+            <button class="primary" style="width:100%;margin-top:18px;min-height:44px" type="submit">Xác nhận email</button>
+            <div class="otp-actions">
+              <button id="oResend" class="sm" type="button">Gửi lại mã</button>
+              <button id="oBack" class="sm ghost" type="button">Quay lại đăng nhập</button>
+            </div>
+          </form>
           <div class="demo">Tài khoản demo (sau khi chạy <span class="mono">python manage.py seed</span>):<br>
             <button class="sm" type="button" data-e="sv1@demo.tdtu.vn" data-p="Demo@123">Sinh viên</button>
             <button class="sm" type="button" data-e="chuquan1@demo.tdtu.vn" data-p="Demo@123">Chủ quán</button>

@@ -13,7 +13,7 @@
   python manage.py status          Kiểm tra health của từng service
   python manage.py reset-demo --yes  XÓA dữ liệu (SQLite, H2, bảng PostgreSQL) rồi start + seed lại
   python manage.py test-services   Chạy test riêng của từng service (node --test, go test, php, JUnit)
-  python manage.py export-openapi  Xuất OpenAPI của 5 service vào docs/openapi/
+  python manage.py export-openapi  Xuất OpenAPI của 5 service + MockMail vào docs/openapi/
   python manage.py backup          Sao lưu 5 cơ sở dữ liệu + ảnh vào backups/ (--list, --verify TỆP, --loop)
   python manage.py restore TỆP --yes  Khôi phục từ bản sao lưu (dừng hệ thống trước; dữ liệu cũ được giữ lại)
 """
@@ -44,11 +44,15 @@ RUN_DIR = Path(os.environ.get("TDTU_RUN_DIR", ROOT / ".run"))     # nơi lưu PI
 LOG_DIR = Path(os.environ.get("TDTU_LOG_DIR", ROOT / "logs"))
 PID_FILE = RUN_DIR / "pids.json"
 SERVICES = ["auth", "restaurant", "order", "notification", "review"]
+# Dịch vụ phụ chạy cùng hệ thống nhưng KHÔNG thuộc 5 service (không seed / backup; export-openapi có xuất tài liệu)
+EXTRA = ["mock_email"]
 IS_WIN = os.name == "nt"
 SVC = ROOT / "services"
 NOTI_BIN = SVC / "notification" / "bin" / ("notification-service.exe" if IS_WIN else "notification-service")
 LANG = {"auth": "Python/FastAPI", "restaurant": "Node.js/Express", "order": "Java/Spring Boot",
-        "notification": "Go/Gin + PostgreSQL", "review": "PHP"}
+        "notification": "Go/Gin + PostgreSQL", "review": "PHP", "mock_email": "Python (email giả lập)"}
+# Khóa bí mật thêm sau bản đầu: init-env sinh ngẫu nhiên; .env cũ thiếu thì được bổ sung (xem upgrade_env)
+NEW_SECRETS = ("EMAIL_API_KEY", "EMAIL_WEBHOOK_SECRET")
 
 
 def env_path() -> Path:
@@ -67,13 +71,40 @@ def cmd_init_env(args) -> None:
     text = text.replace("INTERNAL_KEY=", f"INTERNAL_KEY={secrets.token_urlsafe(32)}", 1)
     text = text.replace("POSTGRES_PASSWORD=", f"POSTGRES_PASSWORD={pg_pw}", 1)
     text = text.replace("<POSTGRES_PASSWORD>", pg_pw)
+    for key in NEW_SECRETS:
+        text = text.replace(f"{key}=", f"{key}={secrets.token_urlsafe(32)}", 1)
     target.write_text(text, encoding="utf-8")
-    print(f"Đã tạo {target} (JWT_SECRET, INTERNAL_KEY, mật khẩu PostgreSQL ngẫu nhiên).")
+    print(f"Đã tạo {target} (JWT_SECRET, INTERNAL_KEY, khóa email, mật khẩu PostgreSQL ngẫu nhiên).")
+
+
+def upgrade_env(target: Path) -> list[str]:
+    """.env tạo từ bản cũ: thêm vào CUỐI tệp các biến mới có trong .env.example mà tệp còn thiếu (khóa bí mật sinh
+    ngẫu nhiên). Không sửa, không xóa dòng nào đang có. Trả danh sách biến đã thêm."""
+    current = target.read_text(encoding="utf-8")
+    have = {ln.split("=", 1)[0].strip() for ln in current.splitlines() if "=" in ln and not ln.lstrip().startswith("#")}
+    added = []
+    for ln in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+        if "=" not in ln or ln.lstrip().startswith("#"):
+            continue
+        key, value = ln.split("=", 1)
+        key = key.strip()
+        if key in have or not (key.startswith(("OTP_", "EMAIL_", "MOCK_EMAIL_"))):
+            continue
+        added.append(f"{key}={secrets.token_urlsafe(32) if key in NEW_SECRETS else value}")
+    if added:
+        sep = "" if current.endswith("\n") or not current else "\n"
+        target.write_text(current + sep + "\n# ---- Bổ sung tự động (xác nhận email bằng OTP, nhà cung cấp email giả lập)\n"
+                          + "\n".join(added) + "\n", encoding="utf-8")
+    return [a.split("=", 1)[0] for a in added]
 
 
 def ensure_env() -> None:
     if not env_path().exists() and not os.environ.get("JWT_SECRET"):
         cmd_init_env(argparse.Namespace(force=False))
+    elif env_path().is_file():
+        added = upgrade_env(env_path())
+        if added:
+            print(f"Đã bổ sung vào {env_path().name}: {', '.join(added)}")
     from common import config
     config.load_env()
 
@@ -86,6 +117,7 @@ def cfg(name: str, default: str | None = None) -> str | None:
 def ports() -> dict[str, int]:
     from common import config
     result = {s: urlparse(config.service_url(s.upper())).port for s in SERVICES}
+    result["mock_email"] = urlparse(config.get("MOCK_EMAIL_URL", "http://127.0.0.1:9000")).port or 9000
     result["web"] = int(config.get("WEB_PORT", "8000"))
     return result
 
@@ -319,11 +351,16 @@ def service_command(name: str, host: str, port: int) -> tuple[list[str], Path, d
     """Lệnh chạy từng service bằng runtime của nó (cwd = thư mục service)."""
     extra = {"BIND_HOST": host}
     if name == "auth":
+        # log truy cập do middleware của common/app.py ghi (có rid=...); tắt access log của uvicorn để không ghi trùng
         return ([sys.executable, "-m", "uvicorn", "services.auth.app:app", "--host", host, "--port", str(port),
-                 "--app-dir", str(ROOT), "--log-level", "info"], ROOT, extra)
+                 "--app-dir", str(ROOT), "--log-level", "info", "--no-access-log"], ROOT, extra)
     if name == "web":
         return ([sys.executable, "-m", "uvicorn", "web.server:app", "--host", host, "--port", str(port),
                  "--app-dir", str(ROOT), "--log-level", "warning"], ROOT, extra)
+    if name == "mock_email":
+        # log truy cập riêng của provider (có rid=...); tắt access log của uvicorn để không ghi trùng
+        return ([sys.executable, "-m", "uvicorn", "services.mock_email.app:app", "--host", host, "--port", str(port),
+                 "--app-dir", str(ROOT), "--log-level", "info", "--no-access-log"], ROOT, extra)
     if name == "restaurant":
         node = which("node")
         if not node:
@@ -375,7 +412,7 @@ def cmd_start(args) -> None:
     if running:
         sys.exit(f"Đang có tiến trình chạy: {running}. Chạy `python manage.py stop` trước.")
     p = ports()
-    busy = [f"{n}:{p[n]}" for n in [*SERVICES, "web"] if tcp_open("127.0.0.1", p[n], 0.3)]
+    busy = [f"{n}:{p[n]}" for n in [*SERVICES, *EXTRA, "web"] if tcp_open("127.0.0.1", p[n], 0.3)]
     if busy:
         sys.exit(f"Cổng đang bị chiếm: {', '.join(busy)}. Tắt chương trình đang dùng cổng hoặc đổi *_URL trong .env.")
     pg = pg_target()
@@ -383,7 +420,7 @@ def cmd_start(args) -> None:
         sys.exit("Không kết nối được PostgreSQL cho Notification "
                  f"({'%s:%s' % pg if pg else 'chưa có NOTIFICATION_DB_URL'}). Xem `python manage.py doctor`.")
     try:
-        plans = {n: service_command(n, args.host, p[n]) for n in [*SERVICES, "web"]}
+        plans = {n: service_command(n, args.host, p[n]) for n in [*SERVICES, *EXTRA, "web"]}
     except RuntimeError as e:
         sys.exit(str(e))
     cmd_init_db()
@@ -420,7 +457,7 @@ def cmd_start(args) -> None:
         cmd_stop(None)
         sys.exit(1)
     print("Đã khởi động. Giao diện: http://127.0.0.1:%d" % p["web"])
-    for s in SERVICES:
+    for s in [*SERVICES, *EXTRA]:
         print(f"  {s:13s} {LANG[s]:22s} http://127.0.0.1:{p[s]}/docs")
 
 
@@ -456,7 +493,7 @@ def cmd_status(_) -> None:
     ensure_env()
     p = ports()
     bad = 0
-    for name in [*SERVICES, "web"]:
+    for name in [*SERVICES, *EXTRA, "web"]:
         ok = http_ok(f"http://127.0.0.1:{p[name]}/health")
         bad += not ok
         print(f"  {name:13s} {LANG.get(name, 'Python (giao diện)'):22s} :{p[name]}  {'OK' if ok else 'KHÔNG PHẢN HỒI'}")
@@ -476,7 +513,7 @@ def cmd_reset_demo(args) -> None:
             (d / f"{f}{suffix}").unlink(missing_ok=True)
     if NOTI_BIN.is_file():
         run([str(NOTI_BIN), "--reset-db"], SVC / "notification")
-    print(f"Đã xóa dữ liệu trong {d} và bảng notifications.")
+    print(f"Đã xóa dữ liệu trong {d} và bảng notifications, email_logs.")
     cmd_start(argparse.Namespace(host="127.0.0.1", timeout=180))
     cmd_seed()
 
@@ -516,7 +553,10 @@ def cmd_export_openapi(_) -> None:
                "notification": SVC / "notification" / "openapi.json", "review": SVC / "review" / "openapi.json"}
     for s, src in sources.items():
         shutil.copyfile(src, out / f"{s}.json")
-    for s in SERVICES:
+    from services.mock_email.app import app as mock_app      # nhà cung cấp email giả lập (Unit 20)
+    (out / "mock_email.json").write_text(json.dumps(mock_app.openapi(), ensure_ascii=False, indent=2),
+                                        encoding="utf-8")
+    for s in [*SERVICES, *EXTRA]:
         print("  ", out / f"{s}.json")
 
 

@@ -8,9 +8,12 @@
  */
 const config = require('./config');
 const { ApiError } = require('./errors');
+const requestId = require('./requestId');
 
 async function call(method, url, service, { token, internal, json, allow = [], timeoutMs } = {}) {
   const headers = { Accept: 'application/json' };
+  const rid = requestId.current();
+  if (rid) headers[requestId.HEADER] = rid;            // chuyển tiếp mã truy vết của yêu cầu đang xử lý
   if (token) headers.Authorization = `Bearer ${token}`;
   if (internal) headers['X-Internal-Key'] = config.internalKey();
   if (json !== undefined) headers['Content-Type'] = 'application/json';
@@ -38,7 +41,7 @@ async function call(method, url, service, { token, internal, json, allow = [], t
     return { status: resp.status, data: body };
   }
   if (resp.status >= 500) {
-    console.warn(`[restaurant] ${service} trả ${resp.status} cho ${method} ${url}`);
+    console.warn(`[restaurant] ${service} trả ${resp.status} cho ${method} ${url} rid=${rid || '-'}`);
     throw new ApiError(502, 'UPSTREAM_ERROR', `${service} đang gặp lỗi, vui lòng thử lại`);
   }
   throw new ApiError(502, 'UPSTREAM_REJECTED', `${service} từ chối yêu cầu nội bộ (HTTP ${resp.status})`);

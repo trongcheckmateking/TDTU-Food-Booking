@@ -159,10 +159,11 @@ function applyCors(array $choPhep): void
     $preflight = ($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS' && isset($_SERVER['HTTP_ACCESS_CONTROL_REQUEST_METHOD']);
     if ($nguon !== '' && in_array($nguon, $choPhep, true)) {
         header('Access-Control-Allow-Origin: ' . $nguon);
+        header('Access-Control-Expose-Headers: X-Request-ID');
         header('Vary: Origin');
         if ($preflight) {
             header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-            header('Access-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key');
+            header('Access-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key, X-Request-ID');
             header('Access-Control-Max-Age: 600');
             http_response_code(200);
             exit;
@@ -179,6 +180,18 @@ function requireInternal(): void
     if (!is_string($given) || $given === '' || !hash_equals(requireEnv('INTERNAL_KEY', 24), $given)) {
         throw new ApiError(403, 'INTERNAL_ONLY', 'API nội bộ, chỉ service tin cậy được gọi');
     }
+}
+
+// 8. X-Request-ID: giữ header hợp lệ (^[A-Za-z0-9._-]{8,128}$) hoặc sinh 32 ký tự hex; public/index.php đặt hằng
+//    REQUEST_ID, Call_Auth_Order chuyển tiếp khi gọi Auth / Order, log ghi rid=...
+function acceptRequestId(mixed $raw): string
+{
+    return is_string($raw) && preg_match('/^[A-Za-z0-9._-]{8,128}$/D', $raw) ? $raw : bin2hex(random_bytes(16));
+}
+
+function currentRequestId(): ?string
+{
+    return defined('REQUEST_ID') ? REQUEST_ID : null;
 }
 
 function nowIso(): string

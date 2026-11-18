@@ -1,7 +1,8 @@
 // Notification Service (Go + Gin + GORM + PostgreSQL, cổng 8004).
 //
 // Nhận sự kiện đơn hàng từ Order Service (API nội bộ, idempotent theo event_key), lưu thông báo cho đúng
-// người nhận; người dùng xem / đánh dấu đã đọc; admin xem / xóa. Hợp đồng API: openapi.json.
+// người nhận; người dùng xem / đánh dấu đã đọc; admin xem / xóa. Gửi email mã OTP qua nhà cung cấp bên thứ ba
+// (email.go) và nhận webhook kết quả giao thư có ký HMAC. Hợp đồng API: openapi.json.
 //
 // Chạy: go build -o bin/notification-service . && ./bin/notification-service  (hoặc python manage.py start)
 package main
@@ -30,10 +31,11 @@ func corsMiddleware(allowed map[string]bool) gin.HandlerFunc {
 		preflight := c.Request.Method == http.MethodOptions && c.GetHeader("Access-Control-Request-Method") != ""
 		if origin != "" && allowed[origin] {
 			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Expose-Headers", ridHeader)
 			c.Header("Vary", "Origin")
 			if preflight {
 				c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
+				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Request-ID")
 				c.Header("Access-Control-Max-Age", "600")
 				c.AbortWithStatus(200)
 				return
@@ -66,8 +68,9 @@ func docsPage(kind string) string {
 func newRouter(db *gorm.DB, internalKey string, origins map[string]bool, quiet bool) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	r.Use(requestID()) // TRƯỚC logger: mọi dòng log truy cập có rid
 	if !quiet {
-		r.Use(gin.LoggerWithConfig(gin.LoggerConfig{SkipPaths: []string{"/health"}}))
+		r.Use(gin.LoggerWithConfig(gin.LoggerConfig{SkipPaths: []string{"/health"}, Formatter: accessLog}))
 	}
 	r.Use(recovery(), corsMiddleware(origins))
 	s := &Server{db: db}
@@ -93,12 +96,16 @@ func newRouter(db *gorm.DB, internalKey string, origins map[string]bool, quiet b
 	r.GET("/redoc", func(c *gin.Context) { c.Data(200, "text/html; charset=utf-8", []byte(docsPage("redoc"))) })
 
 	r.POST("/internal/notifications/events", requireInternal(internalKey), s.receiveEvent)
+	r.POST("/internal/notifications/email", requireInternal(internalKey), s.sendEmail)
+	// webhook của nhà cung cấp email: xác thực bằng chữ ký HMAC (provider không giữ INTERNAL_KEY)
+	r.POST("/internal/webhooks/email-status", s.emailWebhook)
 	r.POST("/internal/users/:uid/erase", requireInternal(internalKey), s.eraseUser)
 	r.GET("/api/notifications/me", requireUser(), s.myNotifications)
 	r.PATCH("/api/notifications/me/read-all", requireUser(), s.readAll)
 	r.PATCH("/api/notifications/:nid/read", requireUser(), s.markRead)
 	r.GET("/api/admin/notifications", requireUser("admin"), s.adminList)
 	r.DELETE("/api/admin/notifications/:nid", requireUser("admin"), s.adminDelete)
+	r.GET("/api/admin/email-logs", requireUser("admin"), s.adminEmailLogs)
 
 	r.NoRoute(func(c *gin.Context) { writeErr(c, apiErr(404, "NOT_FOUND", "Không tìm thấy API")) })
 	return r
@@ -122,13 +129,13 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "--reset-db" { // dùng bởi `python manage.py reset-demo --yes`
-		if err := db.Exec("DROP TABLE IF EXISTS notifications").Error; err != nil {
+		if err := db.Exec("DROP TABLE IF EXISTS notifications, email_logs").Error; err != nil {
 			log.Fatal(err)
 		}
 		if err := db.Exec(schemaSQL).Error; err != nil {
 			log.Fatal(err)
 		}
-		log.Print("Đã xóa và tạo lại bảng notifications")
+		log.Print("Đã xóa và tạo lại bảng notifications, email_logs")
 		return
 	}
 	addr := listenAddr()

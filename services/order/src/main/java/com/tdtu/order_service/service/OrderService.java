@@ -151,6 +151,25 @@ public class OrderService {
         return m;
     }
 
+    /**
+     * Tình trạng gửi thông báo của đơn, tính từ MỌI dòng outbox của đơn: none (chưa có sự kiện nào, ví dụ đơn chuyển
+     * khoản chưa trả tiền), failed (có sự kiện gửi lỗi, worker sẽ gửi lại), pending (đang chờ / đang gửi), sent.
+     */
+    public String notificationStatus(String orderId) {
+        List<String> st = jdbc.queryForList("SELECT status FROM notification_outbox WHERE order_id=?", String.class, orderId);
+        if (st.isEmpty()) return "none";
+        if (st.contains("failed")) return "failed";
+        if (st.contains("pending") || st.contains("sending")) return "pending";
+        return "sent";
+    }
+
+    /** JSON một đơn cho client = toJson(o, false) + notification_status (danh sách đơn không có trường này). */
+    public Map<String, Object> view(Order o) {
+        Map<String, Object> m = toJson(o, false);
+        m.put("notification_status", notificationStatus(o.id()));
+        return m;
+    }
+
     public Map<String, Object> page(String where, List<Object> args, int page, int size) {
         Integer total = jdbc.queryForObject("SELECT COUNT(*) FROM orders WHERE " + where, Integer.class, args.toArray());
         List<Object> a = new ArrayList<>(args);
@@ -210,11 +229,16 @@ public class OrderService {
         String deadline = Times.iso(now.plus(Duration.ofMinutes(paymentTimeoutMinutes())));
         long total = q.items().stream().mapToLong(x -> x.price() * x.quantity()).sum();
         String eventKey;
+        Order[] replayed = {null};
         try {
             eventKey = tx.execute(s -> {
                 Cart locked = carts.lockCart(user.id());          // xếp hàng các checkout đồng thời của cùng user
-                if (key != null && findByKey(user.id(), key) != null) {
-                    throw new ApiError(409, "DUPLICATE_REQUEST", "Yêu cầu đặt hàng này đã được xử lý");
+                // cùng Idempotency-Key, yêu cầu trước vừa đặt xong trong lúc yêu cầu này chờ khóa giỏ:
+                // trả lại ĐÚNG đơn đó (như gửi lại tuần tự), không tạo đơn mới
+                Order prev = key != null ? findByKey(user.id(), key) : null;
+                if (prev != null) {
+                    replayed[0] = prev;
+                    return null;
                 }
                 if (locked == null || !carts.lines(locked.id()).equals(lines)) {
                     throw new ApiError(409, "CART_CHANGED", "Giỏ hàng vừa thay đổi hoặc đã được đặt, vui lòng kiểm tra lại");
@@ -246,12 +270,16 @@ public class OrderService {
                 jdbc.update("DELETE FROM cart_items WHERE cart_id=?", locked.id());     // chỉ xóa giỏ khi thành công
                 jdbc.update("UPDATE carts SET restaurant_id=NULL, updated_at=? WHERE id=?", ts, locked.id());
                 // chuyển khoản: chưa báo quán, đơn chỉ "đặt thành công" khi quán xác nhận đã nhận tiền (confirmPayment);
-                // tiền mặt: đơn tới quán ngay
-                return cash ? outbox.enqueue(load(oid), "order_created_cash", "sinh_vien") : null;
+                // tiền mặt: đơn tới quán ngay -> sự kiện order_created (Notification chỉ nhận đúng các tên sự kiện
+                // trong parseEvent của handlers.go; tên khác bị trả 422 và chủ quán không bao giờ được báo)
+                return cash ? outbox.enqueue(load(oid), "order_created", "sinh_vien") : null;
             });
-        } catch (DuplicateKeyException e) {
+        } catch (DuplicateKeyException e) {                    // UNIQUE(user_id, idempotency_key): yêu cầu trùng khóa vừa ghi
+            Order prev = key != null ? findByKey(user.id(), key) : null;
+            if (prev != null) return new CheckoutResult(prev, true);
             throw new ApiError(409, "DUPLICATE_REQUEST", "Yêu cầu đặt hàng này đã được xử lý");
         }
+        if (replayed[0] != null) return new CheckoutResult(replayed[0], true);
         if (eventKey != null) outbox.deliverQuietly(eventKey);
         return new CheckoutResult(load(oid), false);
     }

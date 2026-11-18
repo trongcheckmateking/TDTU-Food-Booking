@@ -12,7 +12,7 @@ import logging
 
 import requests
 
-from . import config
+from . import config, request_id
 from .errors import ApiError
 
 log = logging.getLogger("tdtu.http")
@@ -22,6 +22,9 @@ def call(method: str, url: str, service: str, *, token: str | None = None, inter
          json: dict | None = None, params: dict | None = None, allow: tuple[int, ...] = (),
          timeout: float | None = None) -> tuple[int, dict | list]:
     headers = {"Accept": "application/json"}
+    rid = request_id.current()
+    if rid:                                    # chuyển tiếp mã truy vết của yêu cầu đang xử lý
+        headers[request_id.HEADER] = rid
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if internal:

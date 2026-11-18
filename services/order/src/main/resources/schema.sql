@@ -95,3 +95,12 @@ CREATE INDEX IF NOT EXISTS idx_orders_payment ON orders(payment_status, pay_dead
 -- Đơn có từ trước khi có thanh toán trước là trả tại quán -> mặc định 'cash'; đơn chuyển khoản luôn có pay_bank_bin.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(10) DEFAULT 'cash' NOT NULL;
 UPDATE orders SET payment_method='transfer' WHERE payment_method='cash' AND pay_bank_bin IS NOT NULL;
+
+-- Sửa lỗi đơn tiền mặt (17/11/2026): bản cũ ghi sự kiện "order_created_cash", Notification không có tên này nên trả
+-- 422 và chủ quán không được báo. Đổi các sự kiện chưa gửi được sang "order_created" và cho gửi lại ngay. Chạy lại
+-- nhiều lần không sao: sau lần đầu không còn dòng nào khớp điều kiện.
+UPDATE notification_outbox
+   SET payload = REPLACE(payload, 'order_created_cash', 'order_created'),
+       event_key = REPLACE(event_key, ':order_created_cash', ':order_created'),
+       status = 'pending', attempts = 0, last_error = NULL, next_attempt_at = created_at
+ WHERE event_key LIKE '%:order_created_cash' AND status <> 'sent';

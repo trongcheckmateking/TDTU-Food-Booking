@@ -3,6 +3,7 @@ package main
 // Lưu trữ PostgreSQL qua GORM. Bảng NOTIFICATIONS (khớp ERD):
 //   UNIQUE(event_key, user_id): Order gửi lại cùng sự kiện (outbox retry) không tạo thông báo trùng.
 //   user_id, order_id là tham chiếu logic sang Auth/Order (không đặt khóa ngoại khác DB).
+// Bảng EMAIL_LOGS: nhật ký gửi email OTP qua nhà cung cấp (không lưu mã), xem email.go.
 
 import (
 	"fmt"
@@ -30,7 +31,59 @@ CREATE TABLE IF NOT EXISTS notifications (
     CONSTRAINT uq_notifications_event_user UNIQUE (event_key, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_noti_user ON notifications(user_id, status, created_at);
+
+-- Nhật ký gửi email qua nhà cung cấp (mã OTP xác nhận email). KHÔNG lưu mã OTP hay nội dung thư.
+--   idempotency_key UNIQUE: Auth gửi lại cùng mã (otp-<otp_id>) không gửi thư lần 2.
+--   provider_message_id UNIQUE: webhook của provider tìm đúng một bản ghi.
+--   sending -> sent (provider nhận) -> delivered / failed (webhook); lỗi gọi provider -> failed (được gửi lại).
+CREATE TABLE IF NOT EXISTS email_logs (
+    id                  UUID PRIMARY KEY,
+    user_id             UUID NOT NULL,
+    to_email            VARCHAR(254) NOT NULL,
+    template            VARCHAR(30)  NOT NULL,
+    status              VARCHAR(10)  NOT NULL CHECK (status IN ('sending','sent','delivered','failed')),
+    provider_message_id VARCHAR(120) UNIQUE,
+    idempotency_key     VARCHAR(120) NOT NULL UNIQUE,
+    last_error          VARCHAR(300),
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_email_logs_user ON email_logs(user_id);
 `
+
+// EmailLog: một lần gửi email qua provider (không có mã OTP).
+type EmailLog struct {
+	ID                string    `gorm:"type:uuid;primaryKey"`
+	UserID            string    `gorm:"type:uuid;not null"`
+	ToEmail           string    `gorm:"not null"`
+	Template          string    `gorm:"not null"`
+	Status            string    `gorm:"not null"`
+	ProviderMessageID *string   `gorm:"column:provider_message_id"`
+	IdempotencyKey    string    `gorm:"not null"`
+	LastError         *string   `gorm:"column:last_error"`
+	CreatedAt         time.Time `gorm:"not null"`
+	UpdatedAt         time.Time `gorm:"not null"`
+}
+
+func (EmailLog) TableName() string { return "email_logs" }
+
+type EmailLogOut struct {
+	ID                string  `json:"id"`
+	UserID            string  `json:"user_id"`
+	ToEmail           string  `json:"to_email"`
+	Template          string  `json:"template"`
+	Status            string  `json:"status"`
+	ProviderMessageID *string `json:"provider_message_id"`
+	LastError         *string `json:"last_error"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
+}
+
+func toEmailOut(e EmailLog) EmailLogOut {
+	return EmailLogOut{ID: e.ID, UserID: e.UserID, ToEmail: e.ToEmail, Template: e.Template, Status: e.Status,
+		ProviderMessageID: e.ProviderMessageID, LastError: e.LastError, CreatedAt: isoTime(e.CreatedAt),
+		UpdatedAt: isoTime(e.UpdatedAt)}
+}
 
 type Notification struct {
 	ID        string    `gorm:"type:uuid;primaryKey"`

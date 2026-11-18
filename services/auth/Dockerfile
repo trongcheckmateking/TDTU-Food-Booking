@@ -20,5 +20,6 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"
 # --proxy-headers: lấy IP thật của người dùng từ X-Forwarded-For do gateway đặt (dùng cho khóa đăng nhập sai nhiều lần).
 # Auth không mở cổng ra ngoài, chỉ gateway gọi được nên tin header này.
+# --no-access-log: log truy cập do middleware ghi (kèm rid=<X-Request-ID>), tránh ghi trùng.
 CMD ["python", "-m", "uvicorn", "services.auth.app:app", "--host", "0.0.0.0", "--port", "8001", \
-     "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]
+     "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header", "--no-access-log"]

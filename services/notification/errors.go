@@ -39,7 +39,8 @@ func validationErr(errs []FieldError) *ApiError {
 func writeErr(c *gin.Context, err error) {
 	e, ok := err.(*ApiError)
 	if !ok {
-		log.Printf("[notification] Lỗi không mong đợi tại %s %s: %v", c.Request.Method, c.Request.URL.Path, err)
+		log.Printf("[notification] Lỗi không mong đợi tại %s %s: %v rid=%s", c.Request.Method, c.Request.URL.Path, err,
+			ridOrDash(requestIDOf(c)))
 		e = apiErr(500, "INTERNAL_ERROR", "Có lỗi nội bộ, vui lòng thử lại sau")
 	}
 	body := gin.H{"detail": e.Message, "code": e.Code}
@@ -52,12 +53,16 @@ func writeErr(c *gin.Context, err error) {
 // ---------------------------------------------------------------- gọi service khác
 // Ánh xạ: không kết nối/quá giờ -> 503 UPSTREAM_UNAVAILABLE; 5xx -> 502 UPSTREAM_ERROR;
 // body không phải JSON object/list -> 502 UPSTREAM_BAD_RESPONSE; 4xx khác -> 502 UPSTREAM_REJECTED.
-func callService(method, url, service, token string, allow ...int) (int, map[string]any, error) {
+// rid: X-Request-ID của yêu cầu đang xử lý, chuyển tiếp sang service được gọi ("" = không gửi).
+func callService(rid, method, url, service, token string, allow ...int) (int, map[string]any, error) {
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if rid != "" {
+		req.Header.Set(ridHeader, rid)
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -89,7 +94,7 @@ func callService(method, url, service, token string, allow ...int) (int, map[str
 		return resp.StatusCode, body, nil
 	}
 	if resp.StatusCode >= 500 {
-		log.Printf("[notification] %s trả %d cho %s %s", service, resp.StatusCode, method, url)
+		log.Printf("[notification] %s trả %d cho %s %s rid=%s", service, resp.StatusCode, method, url, ridOrDash(rid))
 		return 0, nil, apiErr(502, "UPSTREAM_ERROR", service+" đang gặp lỗi, vui lòng thử lại")
 	}
 	return 0, nil, apiErr(502, "UPSTREAM_REJECTED", fmt.Sprintf("%s từ chối yêu cầu nội bộ (HTTP %d)", service, resp.StatusCode))

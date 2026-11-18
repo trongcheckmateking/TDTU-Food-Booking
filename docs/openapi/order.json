@@ -277,7 +277,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrderOut"
+                  "$ref": "#/components/schemas/OrderDetail"
                 }
               }
             }
@@ -598,7 +598,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrderOut"
+                  "$ref": "#/components/schemas/OrderDetail"
                 }
               }
             }
@@ -656,7 +656,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrderOut"
+                  "$ref": "#/components/schemas/OrderDetail"
                 }
               }
             }
@@ -1261,7 +1261,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrderOut"
+                  "$ref": "#/components/schemas/OrderDetail"
                 }
               }
             }
@@ -1330,7 +1330,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrderOut"
+                  "$ref": "#/components/schemas/OrderDetail"
                 }
               }
             }
@@ -1399,7 +1399,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrderOut"
+                  "$ref": "#/components/schemas/OrderDetail"
                 }
               }
             }
@@ -1486,7 +1486,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrderOut"
+                  "$ref": "#/components/schemas/OrderDetail"
                 }
               }
             }
@@ -2058,6 +2058,33 @@
             }
           }
         }
+      },
+      "OrderDetail": {
+        "title": "OrderDetail",
+        "description": "Một đơn (OrderOut) kèm tình trạng gửi thông báo. Danh sách đơn (OrderPage) không có notification_status.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OrderOut"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "notification_status": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "pending",
+                  "sent",
+                  "failed"
+                ],
+                "description": "Tính từ mọi sự kiện outbox của đơn: none = chưa có sự kiện (đơn chuyển khoản chưa trả tiền); failed = có sự kiện gửi lỗi (Notification sập, worker / admin gửi lại); pending = đang chờ gửi; sent = đã gửi hết"
+              }
+            },
+            "required": [
+              "notification_status"
+            ]
+          }
+        ]
       }
     },
     "securitySchemes": {

@@ -11,6 +11,9 @@ mỗi service một CSDL riêng, gọi nhau qua REST JSON, cùng giao diện web
 | Notification | TV4 | Go 1.22+ / Gin + GORM | PostgreSQL 14+ | 8004 |
 | Review | TV5 | PHP 8.1+ (thuần) | SQLite (PDO) | 8005 |
 | Giao diện web | – | Python (phục vụ HTML/CSS/JS tĩnh) | – | 8000 |
+| Mock Email Provider | – | Python / FastAPI (nhà cung cấp email **giả lập**, Unit 20) | bộ nhớ | 9000 |
+
+Sơ đồ kiến trúc: [`docs/diagrams/arch/ARCH_0_microservices.png`](docs/diagrams/arch/ARCH_0_microservices.png).
 
 ## Cấu trúc thư mục
 
@@ -26,11 +29,12 @@ TDTU_FoodBooking_Final/
 │   ├── restaurant/         # Node.js/Express: quán, menu, duyệt quán   (src/, test/, package.json)
 │   ├── order/              # Java/Spring Boot: giỏ, đơn, outbox        (src/main, src/test, pom.xml, mvnw)
 │   ├── notification/       # Go/Gin/GORM: thông báo                   (*.go, go.mod, docker-compose.postgres.yml)
-│   └── review/             # PHP: đánh giá                            (public/index.php, src/, tests/)
+│   ├── review/             # PHP: đánh giá                            (public/index.php, src/, tests/)
+│   └── mock_email/         # Python/FastAPI: nhà cung cấp email giả lập (MockMail) gửi mã OTP, webhook ký HMAC
 ├── image/logo/logo.png     # logo dự án (bản gốc, nền trong suốt)
 ├── web/                    # :8000 giao diện (server.py: trang tĩnh, /config.js, mã QR /qr/*.svg; static/: trang, qr.html, logo, font)
-├── scripts/                # seed_data.py (seed qua API), backup.py (sao lưu / khôi phục), smoke_test.py, build_postman.py, ...
-├── docker-compose.yml      # chạy cả hệ thống bằng Docker: 5 service + web + PostgreSQL + gateway HTTPS + sao lưu
+├── scripts/                # seed_data.py (seed qua API), backup.py, smoke_test.py, demo_concurrency.py, build_postman.py, ...
+├── docker-compose.yml      # chạy cả hệ thống bằng Docker: 5 service + web + PostgreSQL + gateway HTTPS + mock-email + sao lưu
 ├── deploy/                 # gateway/ (Nginx: HTTPS, /svc/<service>/, chặn /internal), backup/ (container sao lưu)
 ├── tests/                  # unit, integration (5 tiến trình thật), e2e (manage.py), ui (Playwright)
 └── docs/                   # tài liệu, OpenAPI, Postman, sơ đồ, báo cáo kiểm thử
@@ -96,6 +100,7 @@ python manage.py seed           # bỏ qua nếu không cần dữ liệu demo
 ```
 
 Không dùng dữ liệu demo: bỏ bước `seed`, tạo admin thật bằng `python manage.py create-admin`.
+Mỗi lệnh làm gì, in ra gì và đọc kết quả thế nào: [`docs/COMMANDS.md`](docs/COMMANDS.md).
 Chạy riêng một service (khi phát triển): xem lệnh trong `docs/ARCHITECTURE.md` mục "Vận hành"; mỗi service tự đọc `.env` ở thư mục gốc.
 
 ## Địa chỉ sau khi start
@@ -108,9 +113,27 @@ Chạy riêng một service (khi phát triển): xem lệnh trong `docs/ARCHITEC
 | Order – Java | http://127.0.0.1:8003/docs |
 | Notification – Go | http://127.0.0.1:8004/docs |
 | Review – PHP | http://127.0.0.1:8005/docs |
+| Mock Email Provider (hộp thư lấy mã OTP) | http://127.0.0.1:9000/docs |
 
 Health/readiness: `GET /health` ở mỗi service (kiểm tra cả kết nối CSDL). Log: thư mục `logs/`.
 Trang `/docs` của Restaurant, Order, Notification, Review tải Swagger UI từ CDN (cần Internet); `/openapi.json` luôn dùng được.
+
+## Xác nhận email bằng OTP (Unit 20)
+
+Bật mặc định (`OTP_ENABLED=true` trong `.env`). Đăng ký → Auth tạo mã 6 số (DB chỉ lưu HMAC) → Notification gửi qua nhà
+cung cấp email giả lập MockMail → giao diện hiện form nhập mã → đúng mã thì đăng nhập luôn. Chưa xác nhận thì đăng nhập
+báo `EMAIL_NOT_VERIFIED` và mở form nhập mã. Đăng ký rồi tải lại trang khi chưa nhập mã thì đăng ký lại cùng email được (cập nhật thông tin, gửi mã mới). Sai 5 lần thì mã bị khóa; gửi lại mã cách nhau tối thiểu 60 giây, tối đa
+5 mã / giờ. Notification hoặc MockMail lỗi thì đăng ký vẫn thành công (`otp_sent=false`), bấm *Gửi lại mã* sau.
+
+**Gửi mã tới hộp thư thật:** điền `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD` trong `.env` (Gmail + mật
+khẩu ứng dụng, các bước ở [`docs/DEPLOY.md`](docs/DEPLOY.md)) rồi khởi động lại; đăng ký bằng email thật là nhận được mã.
+
+**Lấy mã khi demo** (chế độ giả lập, không gửi thư thật): mở `http://127.0.0.1:9000/docs` → **Authorize** (dán `EMAIL_API_KEY` trong
+`.env`) → `GET /api/emails` → Try it out (lọc `to` = email vừa đăng ký) → mã 6 số nằm trong trường `content`.
+Giả lập sự cố: `POST /api/_control/mode` với `{"mode": "fail500" | "rate429" | "slow" | "ok"}`; người nhận bắt
+đầu bằng `fail` → provider trả 500, bắt đầu bằng `bounce` → webhook báo `failed`. Admin xem trạng thái thư ở
+`GET :8004/api/admin/email-logs`. Luồng chi tiết: [`docs/diagrams/arch/ARCH_1_otp_flow.png`](docs/diagrams/arch/ARCH_1_otp_flow.png).
+Tắt OTP: `OTP_ENABLED=false` (đăng ký xác nhận luôn, hai API OTP trả 404 `OTP_DISABLED`).
 
 ## Giao diện, bảng tin món mới và mã QR
 
@@ -228,7 +251,8 @@ bằng địa chỉ công khai.
 | Sinh viên | sv1@demo.tdtu.vn, sv2@demo.tdtu.vn | Demo@123 |
 | Sinh viên bị khóa | sv3.bikhoa@demo.tdtu.vn | Demo@123 |
 
-Đổi các mật khẩu này hoặc không chạy `seed` nếu dùng ngoài mục đích demo.
+Các tài khoản seed được đánh dấu **đã xác nhận email sẵn** (không cần mã OTP). Đổi các mật khẩu này hoặc không chạy `seed`
+nếu dùng ngoài mục đích demo.
 
 ## Dữ liệu
 
@@ -262,7 +286,8 @@ docker compose exec auth python -m services.auth.admin_tools --email <email> --n
 pip install -r requirements-dev.txt
 python manage.py test-services                         # test riêng: node --test, go test, php tests/run.php, mvn test
 python -m pytest tests/unit tests/integration tests/e2e  # 5 tiến trình thật, dữ liệu tạm + schema PostgreSQL tạm
-python scripts/smoke_test.py                           # kiểm tra nhanh hệ thống ĐANG chạy
+python scripts/smoke_test.py                           # kiểm tra nhanh hệ thống ĐANG chạy (có luồng OTP qua MockMail)
+python scripts/demo_concurrency.py                     # demo đồng thời: Idempotency-Key, khóa giỏ, đổi trạng thái
 python -m playwright install chromium && python -m pytest tests/ui   # cần hệ thống đang chạy với dữ liệu demo
 ```
 
@@ -277,14 +302,16 @@ Postman: import `docs/postman/*.json`, chạy thư mục "0. Luồng demo". Kế
 | `docs/ARCHITECTURE.md` | 5 ngôn ngữ, hợp đồng chung, xác thực, luồng đặt món, outbox, đồng thời, vận hành |
 | `docs/API.md` | Quy ước, mã lỗi, ví dụ, bảng mọi endpoint và quyền |
 | `docs/DATABASE.md` | 5 CSDL (SQLite, H2, PostgreSQL), khóa ngoại vs tham chiếu logic, schema |
-| `docs/DEMO.md` | Kịch bản trình diễn 3 vai trò |
+| `docs/DEMO.md` | Kịch bản trình diễn 3 vai trò, Unit 18–22, đồng thời, truy vết X-Request-ID |
 | `docs/REQUIREMENTS.md` | Đối chiếu yêu cầu → chức năng → API/UI → test |
 | `docs/SOURCE_REVIEW.md`, `docs/MERGE_DECISIONS.md` | Đánh giá các bộ nguồn và quyết định hợp nhất theo từng thành viên |
 | `docs/TEST_REPORT.md` | Môi trường, lệnh, kết quả kiểm thử thực tế |
+| `docs/COMMANDS.md` | Bảng tra mọi lệnh: làm gì, in ra gì, đọc kết quả thế nào, khi nào dùng |
 | `docs/DOCKER.md` | Hướng dẫn nhóm chạy cả hệ thống bằng Docker Desktop trên máy cá nhân |
 | `docs/DEPLOY.md` | Chạy thử bằng Docker: gateway HTTPS, sao lưu / khôi phục, cập nhật, yêu cầu xóa dữ liệu |
 | `docs/PROJECT_SUMMARY.md` | Tóm tắt phục vụ thuyết trình |
-| `docs/diagrams/` | Use Case, DFD mức 0/1/2, ERD (PNG/SVG) + `gen_diagrams.py` |
+| `docs/diagrams/` | Kiến trúc microservices + luồng OTP (`arch/`), Use Case, DFD mức 0/1/2, ERD (PNG/SVG) + `gen_diagrams.py` |
+| `docs/CHANGELOG_FINAL.md` | Thay đổi bản cuối kỳ, mức trần đã gỡ, việc còn lại |
 | `docs/openapi/` | OpenAPI của 5 service (`python manage.py export-openapi`) |
 
 ## Lỗi thường gặp
@@ -298,7 +325,8 @@ Postman: import `docs/postman/*.json`, chạy thư mục "0. Luồng demo". Kế
 | `Restaurant chưa cài thư viện` | `python manage.py build --only restaurant` |
 | Node báo không có `node:sqlite` | Cài Node.js 22.13 trở lên |
 | PHP: `could not find driver` / `Call to undefined function curl_init` | Bật `pdo_sqlite`, `curl` trong `php.ini` |
-| `Cổng đang bị chiếm` | Tắt chương trình dùng cổng 8000–8005 hoặc đổi `*_URL`, `WEB_PORT`, `CORS_ORIGINS` trong `.env` |
+| `Cổng đang bị chiếm` | Tắt chương trình dùng cổng 8000–8005, 9000 hoặc đổi `*_URL`, `MOCK_EMAIL_URL`, `WEB_PORT`, `CORS_ORIGINS` trong `.env` |
+| Đăng ký xong báo chưa gửi được email (`otp_sent=false`) | Xem `logs/notification.log`, `logs/mock_email.log`; kiểm tra `EMAIL_PROVIDER_URL`, `EMAIL_API_KEY` trong `.env`; bấm Gửi lại mã |
 | Một service "KHÔNG PHẢN HỒI" | Xem `logs/<service>.log` |
 | Bị đưa về trang đăng nhập "phiên hết hạn" | Token hết hạn, đã đăng xuất, bị đổi vai trò hoặc bị khóa: đăng nhập lại |
 
@@ -306,7 +334,7 @@ Postman: import `docs/postman/*.json`, chạy thư mục "0. Luồng demo". Kế
 
 - SQLite/H2 dạng tệp phù hợp chạy thử một máy chủ (vài trăm người dùng), chưa mở rộng ngang được.
   `php -S` chỉ dùng khi phát triển; bản Docker chạy Review trên Apache.
-- Thanh toán trước do chủ quán tự xác nhận (chưa nối webhook ngân hàng / cổng thanh toán); không có giao hàng,
-  email/SMS; giờ mở cửa chỉ để hiển thị.
+- Thanh toán trước do chủ quán tự xác nhận (chưa nối webhook ngân hàng / cổng thanh toán); không có giao hàng; email chỉ
+  gửi qua nhà cung cấp giả lập MockMail (chưa nối dịch vụ email thật, không có SMS); giờ mở cửa chỉ để hiển thị.
 - Đã chạy và kiểm thử trên Linux và Windows 11 (`manage.py`, `mvnw.cmd`, PHP/Go/Java/Node trên Windows, PostgreSQL bằng
   Docker); `run.ps1 setup` / `pg-setup` trên PowerShell 5.1 chưa chạy lại (xem `docs/TEST_REPORT.md`).

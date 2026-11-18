@@ -8,12 +8,12 @@ import subprocess
 import pytest
 
 import manage
-from tests.conftest import INTERNAL, SERVICES
+from tests.conftest import CORE_SERVICES, INTERNAL
 
 LANG = {"auth": "Python", "restaurant": "Node.js", "order": "Java", "notification": "Go", "review": "PHP"}
 
 
-@pytest.mark.parametrize("name", SERVICES)
+@pytest.mark.parametrize("name", CORE_SERVICES)       # hợp đồng chung của 5 service (không gồm mock email bên thứ ba)
 def test_docs_openapi_health_cors_404(system, name):
     c = system.clients[name]
     docs = c.get("/docs")
@@ -32,6 +32,42 @@ def test_docs_openapi_health_cors_404(system, name):
     assert "access-control-allow-origin" not in bad.headers
     nf = c.get("/khong-ton-tai")
     assert nf.status_code == 404 and nf.json()["code"] == "NOT_FOUND" and isinstance(nf.json()["detail"], str)
+
+
+@pytest.mark.parametrize("name", CORE_SERVICES)
+def test_request_id_echoed_or_generated(system, name):
+    """X-Request-ID ở cả 5 ngôn ngữ: trả lại rid hợp lệ, sinh 32 hex khi thiếu / sai, có trên response lỗi."""
+    import re
+    c = system.clients[name]
+    r = c.get("/khong-ton-tai", headers={"X-Request-ID": "demo-rid-0001"})
+    assert r.status_code == 404 and r.headers.get("X-Request-ID") == "demo-rid-0001", (name, r.headers)
+    for bad in (None, "ngan", "co dau cach!!", "x" * 129):
+        r = c.get("/health", headers={"X-Request-ID": bad} if bad else {})
+        assert re.fullmatch(r"[0-9a-f]{32}", r.headers.get("X-Request-ID", "")), (name, bad, r.headers)
+    cors = c.get("/health", headers={"Origin": "http://127.0.0.1:8000"})
+    assert "x-request-id" in cors.headers.get("access-control-expose-headers", "").lower(), (name, cors.headers)
+
+
+def test_request_id_traced_across_services(world):
+    """Một lần đặt đơn tiền mặt kèm X-Request-ID: Order -> Auth (xác thực), Restaurant (báo giá), Notification (sự kiện)
+    đều ghi cùng rid vào log -> lần theo được một yêu cầu xuyên 4 service."""
+    import time
+    s = world.s
+    rid = "trace-" + s.tag + "-0001"
+    s.order.delete("/api/cart", headers=world.sv)
+    assert s.order.post("/api/cart/items", headers=world.sv, json={"restaurant_id": world.rid, "item_id": world.item1,
+                                                                    "quantity": 1}).status_code == 200
+    r = s.order.post("/api/orders/checkout", headers={**world.sv, "X-Request-ID": rid},
+                     json={"delivery_address": "KTX TDTU", "payment_method": "cash"})
+    assert r.status_code == 201 and r.headers["X-Request-ID"] == rid, r.text
+    missing = []
+    for _ in range(30):
+        missing = [svc for svc in ("order", "auth", "restaurant", "notification")
+                   if f"rid={rid}" not in (s.c.tmp / f"{svc}.log").read_text(encoding="utf-8", errors="replace")]
+        if not missing:
+            break
+        time.sleep(0.1)
+    assert not missing, f"không thấy rid={rid} trong log của {missing}"
 
 
 # mỗi service: 1 API cần đăng nhập để kiểm tra ánh xạ lỗi khi gọi Auth

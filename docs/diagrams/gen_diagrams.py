@@ -18,9 +18,13 @@ ENT = {
               ("string", "password_hash", ""), ("enum", "role", ""), ("string", "phone", ""),
               ("enum", "status", ""), ("int", "token_version", ""), ("timestamp", "created_at", ""),
               ("timestamp", "updated_at", ""), ("timestamp", "terms_accepted_at", ""), ("timestamp", "erased_at", ""),
-              ("string", "avatar_url", ""), ("string", "bank_bin / bank_account / bank_holder", "")],
+              ("string", "avatar_url", ""), ("string", "bank_bin / bank_account / bank_holder", ""),
+              ("timestamp", "email_verified_at", "")],
     "LOGIN_ATTEMPTS": [("string", "key (email|IP)", "PK"), ("int", "fails", ""), ("timestamp", "window_start", ""),
                        ("timestamp", "locked_until", "")],
+    "OTP_CODES": [("uuid", "id", "PK"), ("uuid", "user_id", "FK"), ("enum", "purpose (verify_email)", ""),
+                  ("hex", "code_hash (HMAC, không lưu mã)", ""), ("timestamp", "expires_at", ""), ("int", "attempts", ""),
+                  ("timestamp", "used_at", ""), ("timestamp", "created_at", "")],
     "RESTAURANTS": [("uuid", "id", "PK"), ("uuid", "owner_id", "ref"), ("string", "name", ""),
                     ("string", "address", ""), ("string", "description", ""), ("HH:MM", "open_time", ""),
                     ("HH:MM", "close_time", ""), ("string", "image_url", ""), ("enum", "status", ""),
@@ -41,7 +45,8 @@ ENT = {
                ("uuid", "restaurant_id", "ref"), ("string", "restaurant_name", ""), ("uuid", "restaurant_owner_id", "ref"),
                ("enum", "status", ""), ("int VND", "total_price", ""), ("string", "delivery_address", ""),
                ("string", "note", ""), ("string", "cancel_reason / cancelled_by", ""),
-               ("string", "idempotency_key", "UK*"), ("enum", "payment_status", ""),
+               ("string", "idempotency_key", "UK*"), ("enum", "payment_method (transfer/cash)", ""),
+               ("enum", "payment_status", ""),
                ("string", "pay_bank_bin / pay_account / pay_holder", ""), ("string", "pay_note", ""),
                ("timestamp", "pay_deadline / pay_claimed_at / paid_at", ""), ("timestamp", "created_at / updated_at", "")],
     "ORDER_ITEMS": [("uuid", "id", "PK"), ("uuid", "order_id", "FK"), ("uuid", "item_id", "ref"),
@@ -53,6 +58,10 @@ ENT = {
     "NOTIFICATIONS": [("uuid", "id", "PK"), ("uuid", "user_id", "ref"), ("uuid", "order_id", "ref"),
                       ("string", "event_key", "UK*"), ("string", "type", ""), ("string", "message", ""),
                       ("enum", "status", ""), ("timestamp", "created_at / read_at", "")],
+    "EMAIL_LOGS": [("uuid", "id", "PK"), ("uuid", "user_id", "ref"), ("string ≤254", "to_email", ""),
+                   ("string", "template (otp)", ""), ("enum", "status (sending/sent/delivered/failed)", ""),
+                   ("string", "provider_message_id", "UK"), ("string", "idempotency_key", "UK"),
+                   ("string", "last_error", ""), ("timestamp", "created_at / updated_at", "")],
     "REVIEWS": [("uuid", "id", "PK"), ("uuid", "user_id", "ref"), ("string", "reviewer_name", ""),
                 ("uuid", "restaurant_id", "ref"), ("string", "restaurant_name", ""), ("uuid", "order_id", "ref, UK"),
                 ("int 1–5", "rating", ""), ("string ≤1000", "comment", ""), ("enum", "status", ""),
@@ -60,6 +69,8 @@ ENT = {
 }
 OWNER = {
     "USERS": ("Auth Service (Python · SQLite)", "#DCEBFA"), "LOGIN_ATTEMPTS": ("Auth Service (Python · SQLite)", "#DCEBFA"),
+    "OTP_CODES": ("Auth Service (Python · SQLite)", "#DCEBFA"),
+    "EMAIL_LOGS": ("Notification Service (Go · PostgreSQL)", "#EFE3F7"),
     "RESTAURANTS": ("Restaurant Service (Node.js · SQLite)", "#E3F4E1"), "MENU_ITEMS": ("Restaurant Service (Node.js · SQLite)", "#E3F4E1"),
     "MENU_UPDATES": ("Restaurant Service (Node.js · SQLite)", "#E3F4E1"),
     "CARTS": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"), "CART_ITEMS": ("Order Service (Java Spring Boot · H2)", "#FDEBD3"),
@@ -71,6 +82,8 @@ OWNER = {
 }
 CORE = ["USERS", "RESTAURANTS", "MENU_ITEMS", "ORDERS", "ORDER_ITEMS", "NOTIFICATIONS", "REVIEWS"]
 REL = [
+    ("USERS", "OTP_CODES", "verifies email", "crowodot"),
+    ("USERS", "EMAIL_LOGS", "receives email", "crowodot"),
     ("USERS", "RESTAURANTS", "owns", "crowodot"),
     ("USERS", "ORDERS", "places", "crowodot"),
     ("USERS", "CARTS", "has cart", "teeodot"),
@@ -212,20 +225,24 @@ def write_render(path_noext, src):
 # =================================================================== BUILD ==
 def build_erd():
     erd("ERD_0_tong_the", "ERD tổng thể – TDTU Food Booking (bản hợp nhất)", list(ENT), [],
-        "7 bảng lõi + CARTS, CART_ITEMS, NOTIFICATION_OUTBOX, MENU_UPDATES. Màu = service sở hữu: xanh dương Auth (Python, SQLite), "
-        "xanh lá Restaurant (Node.js, SQLite), cam Order (Java Spring Boot, H2), tím Notification (Go, PostgreSQL), "
-        "hồng Review (PHP, SQLite). Nét liền = FK thật cùng DB; nét đứt = tham chiếu logic xuyên service (không có FK)")
-    erd("ERD_1_auth", "ERD – Auth Service (Python · SQLite)", ["USERS", "LOGIN_ATTEMPTS"], ["RESTAURANTS", "ORDERS", "CARTS", "REVIEWS", "NOTIFICATIONS"],
+        "7 bảng lõi + CARTS, CART_ITEMS, NOTIFICATION_OUTBOX, MENU_UPDATES, OTP_CODES, EMAIL_LOGS. Màu = service sở hữu: "
+        "xanh dương Auth (Python, SQLite), xanh lá Restaurant (Node.js, SQLite), cam Order (Java Spring Boot, H2), "
+        "tím Notification (Go, PostgreSQL), hồng Review (PHP, SQLite). Nét liền = FK thật cùng DB; "
+        "nét đứt = tham chiếu logic xuyên service (không có FK)")
+    erd("ERD_1_auth", "ERD – Auth Service (Python · SQLite)", ["USERS", "LOGIN_ATTEMPTS", "OTP_CODES"],
+        ["RESTAURANTS", "ORDERS", "CARTS", "REVIEWS", "NOTIFICATIONS", "EMAIL_LOGS"],
         "Sở hữu USERS. status active/locked; token_version tăng khi khóa, đổi vai trò, đăng xuất → token cũ hết hiệu lực. "
-        "LOGIN_ATTEMPTS: đếm đăng nhập sai theo email + IP để tạm khóa")
+        "LOGIN_ATTEMPTS: đếm đăng nhập sai theo email + IP để tạm khóa. OTP_CODES: mã xác nhận email chỉ lưu HMAC, "
+        "sai đủ OTP_MAX_ATTEMPTS lần thì khóa mã; email_verified_at = đã xác nhận")
     erd("ERD_2_restaurant", "ERD – Restaurant Service (Node.js · SQLite)", ["RESTAURANTS", "MENU_ITEMS", "MENU_UPDATES"], ["USERS"],
         "status quán: pending / active / closed / locked; món: available / sold_out / hidden; xóa = deleted_at. "
         "MENU_UPDATES = bảng tin món mới, mỗi món một tin (thêm món, đổi giá, bán lại)")
     erd("ERD_3_order", "ERD – Order Service (Java Spring Boot · H2)", ["CARTS", "CART_ITEMS", "ORDERS", "ORDER_ITEMS", "NOTIFICATION_OUTBOX", "PICKUP_COUNTERS"],
         ["USERS", "RESTAURANTS", "MENU_ITEMS"],
         "Đơn lưu ảnh chụp tên quán, tên món, đơn giá. UK* = UNIQUE(user_id, idempotency_key)")
-    erd("ERD_4_notification", "ERD – Notification Service (Go · PostgreSQL)", ["NOTIFICATIONS"], ["USERS", "ORDERS"],
-        "UK* = UNIQUE(event_key, user_id): gửi lại cùng sự kiện không tạo thông báo trùng")
+    erd("ERD_4_notification", "ERD – Notification Service (Go · PostgreSQL)", ["NOTIFICATIONS", "EMAIL_LOGS"], ["USERS", "ORDERS"],
+        "UK* = UNIQUE(event_key, user_id): gửi lại cùng sự kiện không tạo thông báo trùng. EMAIL_LOGS: email gửi qua nhà "
+        "cung cấp (không lưu mã OTP); idempotency_key UNIQUE chống gửi trùng, provider_message_id để webhook cập nhật")
     erd("ERD_5_review", "ERD – Review Service (PHP · SQLite)", ["REVIEWS"], ["USERS", "RESTAURANTS", "ORDERS"],
         "Mỗi đơn tối đa 1 đánh giá (order_id UNIQUE); admin ẩn (status=hidden) thay vì xóa")
 
@@ -418,11 +435,146 @@ def build_usecase():
             [("v1", "v4", "include")])
 
 
+# ------------------------------------------------------------ KIẾN TRÚC ----
+def _svc(node, title, lang, port, color):
+    return (f'{node} [shape=box, style="rounded,filled", fillcolor="{color}", penwidth=1.6, margin="0.2,0.12", '
+            f'label=<<B>{title}</B><BR/><FONT POINT-SIZE="11">{lang}</FONT><BR/><FONT POINT-SIZE="11">cổng {port}</FONT>>];')
+
+
+def _db(node, engine, tables):
+    rows = "<BR/>".join(tables)
+    return (f'{node} [shape=cylinder, style=filled, fillcolor="#FFFFFF", penwidth=1.4, margin="0.15,0.1", '
+            f'label=<<B>{engine}</B><BR/><FONT POINT-SIZE="10">{rows}</FONT>>];')
+
+
+def build_arch():
+    """ARCH_0: kiến trúc microservices - 5 service (5 ngôn ngữ), mỗi service một DB riêng, gateway, web, mock email."""
+    L = ['digraph G {',
+         f'graph [fontname="{FONT}", rankdir=TB, newrank=true, compound=true, nodesep=0.9, ranksep=1.0, pad=0.4, '
+         f'splines=true, labelloc=t, fontsize=22, label=<<B>Kiến trúc microservices – TDTU Food Booking</B><BR/>'
+         f'<FONT POINT-SIZE="13">5 service độc lập, 5 ngôn ngữ, mỗi service một cơ sở dữ liệu riêng, giao tiếp REST JSON; '
+         f'không service nào đọc DB của service khác</FONT>>];',
+         f'node [fontname="{FONT}", fontsize=12];',
+         f'edge [fontname="{FONT}", fontsize=10, arrowsize=0.8, color="#333333"];',
+         'USER [shape=box, style="filled", fillcolor="#FFF6D6", penwidth=2, margin="0.25,0.15", '
+         'label=<<B>Người dùng</B><BR/><FONT POINT-SIZE="11">Sinh viên · Chủ quán · Admin</FONT><BR/>'
+         '<FONT POINT-SIZE="11">trình duyệt / app điện thoại (PWA)</FONT>>];',
+         'GW [shape=box, style="filled", fillcolor="#263238", fontcolor="white", penwidth=1.6, margin="0.25,0.15", '
+         'label=<<B>API Gateway – Nginx</B><BR/><FONT POINT-SIZE="10">HTTPS 443 (80 → 443), HSTS</FONT><BR/>'
+         '<FONT POINT-SIZE="10">/ → Web · /svc/&lt;service&gt;/ → service</FONT><BR/>'
+         '<FONT POINT-SIZE="10">rate limit theo IP (đăng nhập, OTP, tải ảnh)</FONT><BR/>'
+         '<FONT POINT-SIZE="10">chặn /internal và /docs từ Internet</FONT><BR/>'
+         '<FONT POINT-SIZE="10">gắn / chuyển tiếp X-Request-ID</FONT>>];',
+         'WEB [shape=box, style="rounded,filled", fillcolor="#ECEFF1", penwidth=1.4, '
+         'label=<<B>Web UI</B><BR/><FONT POINT-SIZE="11">HTML/CSS/JS tĩnh (Python)</FONT><BR/>'
+         '<FONT POINT-SIZE="11">cổng 8000</FONT>>];',
+         'USER -> GW [label=<HTTPS>, penwidth=1.6];',
+         'GW -> WEB [label=<trang tĩnh>];']
+    # thứ tự trái -> phải trên hàng service: Review, Order, Restaurant, Auth, Notification (giảm đường cắt nhau)
+    clusters = [
+        ("review", "Review Service", "PHP 8 (thuần)", 8005, "#FBE0E0", "SQLite", ["reviews"]),
+        ("order", "Order Service", "Java · Spring Boot", 8003, "#FDEBD3", "H2",
+         ["carts, cart_items", "orders, order_items", "notification_outbox", "pickup_counters"]),
+        ("restaurant", "Restaurant Service", "Node.js · Express", 8002, "#E3F4E1", "SQLite",
+         ["restaurants", "menu_items", "menu_updates"]),
+        ("auth", "Auth Service", "Python · FastAPI", 8001, "#DCEBFA", "SQLite", ["users", "otp_codes", "login_attempts"]),
+        ("notification", "Notification Service", "Go · Gin + GORM", 8004, "#EFE3F7", "PostgreSQL",
+         ["notifications", "email_logs"]),
+    ]
+    for key, title, lang, port, color, engine, tables in clusters:
+        L.append(f'subgraph cluster_{key} {{ label=""; style="rounded,dashed"; color="#90A4AE"; margin=10;')
+        L.append("  " + _svc(key.upper(), title, lang, port, color))
+        L.append("  " + _db(key.upper() + "_DB", engine, tables))
+        L.append(f'  {key.upper()} -> {key.upper()}_DB [arrowhead=none, penwidth=1.4, color="#607D8B"];')
+        L.append('}')
+        L.append(f'GW -> {key.upper()} [color="#90A4AE"];')            # /svc/<service>/ (ghi trong khung gateway)
+    L.append('{rank=same; ' + "; ".join(k.upper() for k, *_ in clusters) + '; MOCK}')
+    L.append('{rank=same; ' + "; ".join(k.upper() + "_DB" for k, *_ in clusters) + '}')
+    L += ['subgraph cluster_third { label=<<B>Bên thứ ba (giả lập)</B>>; style="rounded,filled"; fillcolor="#FAFAFA"; '
+          'color="#B0BEC5"; margin=14; fontsize=12;',
+          '  MOCK [shape=box, style="rounded,filled", fillcolor="#FFFDE7", penwidth=1.4, '
+          'label=<<B>Mock Email Provider</B><BR/><FONT POINT-SIZE="11">MockMail · Python FastAPI</FONT><BR/>'
+          '<FONT POINT-SIZE="11">cổng 9000 · dữ liệu trong bộ nhớ</FONT>>];', '}']
+    # REST đồng bộ (nét liền); constraint=false: không làm xáo trộn hàng service
+    # cặp 2 chiều tách cổng trên / dưới để nhãn không chồng nhau
+    sync = [
+        ("ORDER", "RESTAURANT", "POST /internal/quote<BR/>(giá, món còn bán)", ""),
+        ("ORDER", "AUTH", "GET /api/users/me<BR/>GET /internal/users/{id}/payout", "tailport=n, headport=n"),
+        ("RESTAURANT", "AUTH", "GET /api/users/me", ""),
+        ("REVIEW", "AUTH", "GET /api/users/me", "tailport=n, headport=n"),
+        ("NOTIFICATION", "AUTH", "GET /api/users/me", "tailport=sw, headport=se"),
+        ("REVIEW", "ORDER", "GET /internal/orders/{id}<BR/>(đơn completed?)", ""),
+        ("AUTH", "NOTIFICATION", "POST /internal/notifications/email<BR/>(mã OTP)", "tailport=ne, headport=nw"),
+        ("NOTIFICATION", "MOCK", "POST /api/send<BR/>X-API-Key, Idempotency-Key", "tailport=ne, headport=nw"),
+    ]
+    for a, b, lab, ports in sync:
+        L.append(f'{a} -> {b} [label=<{lab}>, penwidth=1.2, constraint=false{", " + ports if ports else ""}];')
+    # Auth điều phối xóa dữ liệu cá nhân: gom thành 1 ghi chú thay vì 4 mũi tên chéo
+    L.append('ERASE [shape=note, style=filled, fillcolor="#F5F5F5", fontsize=10, label=<<B>Auth → erase</B><BR/>'
+             'POST /internal/users/{id}/erase<BR/>lần lượt tới Order, Restaurant,<BR/>Review, Notification>];')
+    L.append('AUTH_DB -> ERASE [style=invis];')                       # ghi chú nằm ngay dưới Auth
+    # bất đồng bộ / gửi lại (nét đứt)
+    L.append('ORDER_DB -> NOTIFICATION_DB [style=invis];')
+    L.append('ORDER -> NOTIFICATION [label=<<B>outbox</B>: POST /internal/notifications/events<BR/>'
+             'gửi lại khi Notification sập>, style=dashed, penwidth=1.6, color="#E65100", fontcolor="#E65100", '
+             'constraint=false, tailport=s, headport=s];')
+    L.append('MOCK -> NOTIFICATION [label=<<B>webhook</B> delivered / failed<BR/>ký HMAC-SHA256>, style=dashed, '
+             'penwidth=1.6, color="#6A1B9A", fontcolor="#6A1B9A", constraint=false, tailport=sw, headport=se];')
+    L.append('LEGEND [shape=plain, label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" CELLPADDING="4" COLOR="#90A4AE">'
+             '<TR><TD COLSPAN="2"><B>Chú giải</B></TD></TR>'
+             '<TR><TD ALIGN="LEFT">——→</TD><TD ALIGN="LEFT">REST đồng bộ (timeout, ánh xạ lỗi 503 / 502)</TD></TR>'
+             '<TR><TD ALIGN="LEFT"><FONT COLOR="#E65100">- - -→</FONT></TD><TD ALIGN="LEFT">bất đồng bộ: outbox gửi lại, '
+             'webhook có chữ ký</TD></TR>'
+             '<TR><TD ALIGN="LEFT"><FONT COLOR="#90A4AE">——→</FONT></TD><TD ALIGN="LEFT">gateway chuyển /svc/&lt;service&gt;/... '
+             'của trình duyệt tới service</TD></TR>'
+             '<TR><TD ALIGN="LEFT">trụ</TD><TD ALIGN="LEFT">DB riêng của service (bảng chính)</TD></TR>'
+             '<TR><TD ALIGN="LEFT">/internal</TD><TD ALIGN="LEFT">API nội bộ, header X-Internal-Key</TD></TR>'
+             '<TR><TD ALIGN="LEFT">mọi lời gọi</TD><TD ALIGN="LEFT">chuyển tiếp X-Request-ID (truy vết qua log)</TD></TR>'
+             '</TABLE>>];')
+    L.append('}')
+    write_render(os.path.join(OUT, "arch", "ARCH_0_microservices"), "\n".join(L))
+
+
+def build_otp_flow():
+    """ARCH_1: luồng đăng ký có xác nhận email bằng mã OTP (Unit 20), các bước đánh số."""
+    L = ['digraph G {',
+         f'graph [fontname="{FONT}", rankdir=LR, nodesep=0.5, ranksep=0.9, pad=0.4, labelloc=t, fontsize=20, '
+         f'label=<<B>Luồng xác nhận email bằng mã OTP</B><BR/><FONT POINT-SIZE="12">Notification hoặc nhà cung cấp email '
+         f'lỗi thì đăng ký vẫn thành công (otp_sent=false), người dùng bấm Gửi lại mã</FONT>>];',
+         f'node [fontname="{FONT}", fontsize=12];',
+         f'edge [fontname="{FONT}", fontsize=10, arrowsize=0.8, color="#333333"];',
+         ext("U", "Sinh viên / Chủ quán"),
+         _svc("A", "Auth Service", "Python · FastAPI", 8001, "#DCEBFA"),
+         _db("ADB", "SQLite (Auth)", ["users.email_verified_at", "otp_codes (HMAC, attempts)"]),
+         _svc("N", "Notification Service", "Go · Gin", 8004, "#EFE3F7"),
+         _db("NDB", "PostgreSQL", ["email_logs", "sending → sent → delivered/failed"]),
+         'M [shape=box, style="rounded,filled", fillcolor="#FFFDE7", penwidth=1.4, '
+         'label=<<B>MockMail</B><BR/><FONT POINT-SIZE="11">cổng 9000</FONT>>];',
+         'BOX [shape=note, style=filled, fillcolor="#FFFFFF", label=<<B>Hộp thư</B><BR/><FONT POINT-SIZE="10">'
+         'GET /api/emails (demo)</FONT>>];',
+         'U -> A [label=<<B>1</B> POST /api/users/register>];',
+         'A -> ADB [label=<<B>2</B> user + otp_codes<BR/>cùng transaction>];',
+         'A -> N [label=<<B>3</B> sau commit: POST /internal/notifications/email<BR/>idempotency_key = otp-&lt;id&gt;>];',
+         'N -> NDB [label=<<B>4</B> email_logs: sending>];',
+         'N -> M [label=<<B>5</B> POST /api/send<BR/>X-API-Key, Idempotency-Key>];',
+         'M -> N [label=<<B>6</B> 202 message_id → sent>, style=dashed];',
+         'M -> BOX [label=<<B>7</B> thư có mã 6 số>];',
+         'M -> N [label=<<B>8</B> ~1s: webhook ký HMAC<BR/>delivered / failed>, style=dashed, color="#6A1B9A", '
+         'fontcolor="#6A1B9A", constraint=false];',
+         'BOX -> U [label=<<B>9</B> đọc mã>, style=dotted];',
+         'U -> A [label=<<B>10</B> POST /api/users/verify-otp<BR/>sai 5 lần → khóa mã; đúng → token>, color="#1565C0", '
+         'fontcolor="#1565C0"];',
+         '}']
+    write_render(os.path.join(OUT, "arch", "ARCH_1_otp_flow"), "\n".join(L))
+
+
+DIRS = ("erd", "dfd", "usecase", "arch")
+
 if __name__ == "__main__":
-    for d in ("erd", "dfd", "usecase"):
+    for d in DIRS:
         os.makedirs(os.path.join(OUT, d), exist_ok=True)
-    build_erd(); build_dfd(); build_usecase()
-    for d in ("erd", "dfd", "usecase"):            # chỉ giữ PNG/SVG, xóa tệp .dot trung gian
+    build_erd(); build_dfd(); build_usecase(); build_arch(); build_otp_flow()
+    for d in DIRS:                                  # chỉ giữ PNG/SVG, xóa tệp .dot trung gian
         for f in os.listdir(os.path.join(OUT, d)):
             if f.endswith(".dot"):
                 os.remove(os.path.join(OUT, d, f))

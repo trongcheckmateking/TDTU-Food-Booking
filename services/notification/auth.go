@@ -29,8 +29,8 @@ func bearerToken(c *gin.Context) string {
 	return ""
 }
 
-func verifyToken(token string) (*AuthUser, error) {
-	status, data, err := callService("GET", serviceURL("AUTH")+"/api/users/me", "Auth Service", token, 401, 403)
+func verifyToken(rid, token string) (*AuthUser, error) {
+	status, data, err := callService(rid, "GET", serviceURL("AUTH")+"/api/users/me", "Auth Service", token, 401, 403)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func requireUser(allowed ...string) gin.HandlerFunc {
 			writeErr(c, apiErr(401, "UNAUTHORIZED", "Cần đăng nhập (thiếu Bearer token)"))
 			return
 		}
-		u, err := verifyToken(token)
+		u, err := verifyToken(requestIDOf(c), token)
 		if err != nil {
 			writeErr(c, err)
 			return

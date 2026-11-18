@@ -256,14 +256,18 @@
         ? h("button", { class: "danger", onclick: ev => setStatus(ev.currentTarget, u, "locked", done) }, "Khóa tài khoản")
         : h("button", { onclick: ev => setStatus(ev.currentTarget, u, "active", done) }, "Mở khóa tài khoản"),
       h("button", { onclick: ev => changeRoleTo(ev.currentTarget, u, toRole, done) }, toLabel),
-      h("button", { class: "danger ghost", onclick: () => eraseUser(u, done) }, "Xóa dữ liệu cá nhân"));
+      h("button", { class: "danger ghost", onclick: () => eraseUser(u, done) }, "Xóa tài khoản"));
   }
+
+  /** Nút "Xóa" trên hàng danh sách: cùng hộp xác nhận gõ lại email; không hiện với admin, chính mình, tài khoản đã xóa. */
+  const deleteButton = (u, done) => u.id === me || u.role === "admin" || u.erased_at ? null
+    : h("button", { class: "sm danger ghost", "aria-label": "Xóa tài khoản " + u.email, onclick: () => eraseUser(u, done) }, "Xóa");
 
   /** Yêu cầu xóa dữ liệu (Chính sách quyền riêng tư, mục 8): gõ lại email để xác nhận, Auth điều phối 4 service còn lại. */
   async function eraseUser(u, done) {
     const input = h("input", { autocomplete: "off", spellcheck: "false", placeholder: u.email });
     let tried = false;
-    const ok = await dialog("Xóa dữ liệu cá nhân", [
+    const ok = await dialog("Xóa tài khoản", [
       h("p", null, `Chỉ làm khi người dùng gửi yêu cầu từ chính email ${u.email}. Không hoàn tác được.`),
       h("ul", { class: "small erase-list" },
         h("li", null, "Tài khoản bị khóa và đăng xuất ngay."),
@@ -272,13 +276,13 @@
         h("li", null, "Số tiền, số đơn và số sao được giữ để thống kê không sai."),
         h("li", null, "Còn đơn đang chờ hoặc đã xác nhận thì phải hoàn thành hay hủy đơn trước.")),
       field("Gõ lại email để xác nhận", input)],
-      [{ label: "Hủy", value: false }, { label: "Xóa dữ liệu", class: "danger", run: async () => {
+      [{ label: "Hủy", value: false }, { label: "Xóa tài khoản", class: "danger", run: async () => {
         if (input.value.trim().toLowerCase() !== u.email) { toast("Email xác nhận không khớp", true); input.focus(); return false; }
         tried = true;
         await api("auth", `/api/users/${u.id}/erase`, { method: "POST" });
         return true;
       } }]);
-    if (ok) toast("Đã xóa dữ liệu cá nhân");
+    if (ok) toast("Đã xóa tài khoản " + u.email);
     if (ok || tried) done();          // lần thử bị từ chối vẫn đã khóa tài khoản: vẽ lại danh sách
   }
 
@@ -360,8 +364,8 @@
         : "Theo dõi lịch sử đặt món, khóa tài khoản vi phạm hoặc chuyển sinh viên thành chủ quán.")), search), chips, list);
     const chipTurn = latest(seq);
     const drawChips = () => safe(chips, chipTurn, async ok => {
-      const [all, active, locked] = await Promise.all([count("auth", "/api/users", { role }), count("auth", "/api/users", { role, status: "active" }),
-        count("auth", "/api/users", { role, status: "locked" })]);
+      const [all, active, locked] = await Promise.all([count("auth", "/api/users", { role, erased: false }),
+        count("auth", "/api/users", { role, status: "active", erased: false }), count("auth", "/api/users", { role, status: "locked", erased: false })]);
       if (!ok()) return;
       mount(chips, filterChips([["", "Tất cả", all], ["active", "Đang hoạt động", active], ["locked", "Bị khóa", locked]], status,
         v => { status = v; page = 1; drawChips(); draw(); }));
@@ -378,7 +382,7 @@
     const listTurn = latest(seq);
     const draw = () => load(list, async () => {
       const ok = listTurn();
-      const r = await api("auth", "/api/users", { query: { role, status, q, page, page_size: 15 } });
+      const r = await api("auth", "/api/users", { query: { role, status, q, page, page_size: 15, erased: false } });
       if (isOwner && !restByOwner) {                // quán của mọi chủ quán, gom theo chủ; tải 1 lần mỗi lần mở trang / sau thao tác
         const map = {};
         for (let p = 1; p <= 10; p++) {
@@ -398,7 +402,8 @@
         { label: "", actions: true, render: u => [
           h("button", { class: "sm", onclick: () => (isOwner ? ownerDetail : studentDetail)(u, redraw) }, "Chi tiết"),
           u.erased_at ? null : u.status === "active" ? h("button", { class: "sm danger", onclick: ev => setStatus(ev.currentTarget, u, "locked", redraw) }, "Khóa")
-            : h("button", { class: "sm", onclick: ev => setStatus(ev.currentTarget, u, "active", redraw) }, "Mở khóa")] },
+            : h("button", { class: "sm", onclick: ev => setStatus(ev.currentTarget, u, "active", redraw) }, "Mở khóa"),
+          deleteButton(u, redraw)] },
       ].filter(Boolean), r.items, isOwner ? "Không có chủ quán phù hợp" : "Không có sinh viên phù hợp"), pager(r, p => { page = p; draw(); }));
     });
     drawChips(); draw();
@@ -414,14 +419,16 @@
     const sRole = h("select", { "aria-label": "Vai trò", onchange: e => { role = e.target.value; page = 1; draw(); } },
       h("option", { value: "" }, "Mọi vai trò"), ["sinh_vien", "chu_quan", "admin"].map(x => h("option", { value: x, selected: x === role }, STATUS[x][0])));
     const sStatus = h("select", { "aria-label": "Trạng thái", onchange: e => { status = e.target.value; page = 1; draw(); } },
-      h("option", { value: "" }, "Mọi trạng thái"), h("option", { value: "active" }, "Hoạt động"), h("option", { value: "locked", selected: status === "locked" }, "Bị khóa"));
+      h("option", { value: "" }, "Mọi trạng thái"), h("option", { value: "active" }, "Hoạt động"), h("option", { value: "locked", selected: status === "locked" }, "Bị khóa"),
+      h("option", { value: "erased" }, "Đã xóa"));
     mount(main, h("div", { class: "head" }, h("div", null, h("h1", null, "Tất cả tài khoản"),
       h("p", { class: "small muted", style: "margin:0" }, "Đổi vai trò, khóa / mở khóa mọi tài khoản, kể cả quản trị viên.")),
     h("div", { class: "row" }, search, sRole, sStatus)), list);
     const listTurn = latest(seq);
     const draw = () => load(list, async () => {
       const ok = listTurn();
-      const r = await api("auth", "/api/users", { query: { role, status, q, page, page_size: 15 } });
+      const erased = status === "erased";
+      const r = await api("auth", "/api/users", { query: { role, status: erased ? "" : status, q, page, page_size: 15, erased } });
       if (!ok()) return;
       mount(list, table([
         { label: "Người dùng", render: u => personCell(u) },
@@ -433,7 +440,8 @@
         { label: "", actions: true, render: u => u.id === me ? h("span", { class: "small muted" }, "Bạn") : [
           u.role !== "admin" ? h("button", { class: "sm", onclick: () => (u.role === "chu_quan" ? ownerDetail : studentDetail)(u, draw) }, "Chi tiết") : null,
           u.erased_at ? null : u.status === "active" ? h("button", { class: "sm danger", onclick: ev => setStatus(ev.currentTarget, u, "locked", draw) }, "Khóa")
-            : h("button", { class: "sm", onclick: ev => setStatus(ev.currentTarget, u, "active", draw) }, "Mở khóa")] },
+            : h("button", { class: "sm", onclick: ev => setStatus(ev.currentTarget, u, "active", draw) }, "Mở khóa"),
+          deleteButton(u, draw)] },
       ], r.items, "Không có người dùng phù hợp"), pager(r, p => { page = p; draw(); }));
     });
     draw();

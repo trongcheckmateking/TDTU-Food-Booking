@@ -233,6 +233,10 @@ main.landing{max-width:none;padding:0}
 .seg{display:flex;border:1px solid var(--line);border-radius:11px;padding:3px;margin:16px 0 4px;background:var(--sunk)}
 .seg button{flex:1;border:0;border-radius:8px;min-height:38px;background:transparent;color:var(--muted)}
 .seg button.on{background:var(--panel);color:var(--blue);box-shadow:0 1px 3px rgba(var(--shade),.15)}
+/* Ô nhập mã OTP: chữ số lớn, cách đều, vừa màn hình điện thoại (không tràn ngang) */
+.otp-input{font-size:26px;font-weight:700;letter-spacing:.45em;text-align:center;font-variant-numeric:tabular-nums;padding-left:.45em}
+.otp-actions{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-top:12px}
+.otp-actions button{min-height:40px}
 .demo{margin-top:18px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:12px}
 .demo button{margin:6px 6px 0 0}
 

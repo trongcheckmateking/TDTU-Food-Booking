@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -20,6 +21,7 @@ import pytest
 import requests
 
 ROOT = Path(__file__).resolve().parents[2]
+EMAIL_API_KEY = "e2e-email-api-key-" + "k" * 16
 
 
 def free_port() -> int:
@@ -31,17 +33,23 @@ def free_port() -> int:
 class Cluster:
     def __init__(self, tmp: Path):
         self.tmp = tmp
-        self.ports = {n: free_port() for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW", "WEB")}
+        self.ports = {n: free_port() for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW", "WEB", "MOCK_EMAIL")}
+        # bỏ EMAIL_SMTP_*: .env thật có thể bật gửi thư qua SMTP, test KHÔNG được gửi thư thật (dùng hộp thư mock)
         env = {k: v for k, v in os.environ.items()
-               if k not in ("JWT_SECRET", "INTERNAL_KEY", "DATA_DIR", "OUTBOX_INTERVAL", "CORS_ORIGINS", "HTTP_TIMEOUT")}
+               if k not in ("JWT_SECRET", "INTERNAL_KEY", "DATA_DIR", "OUTBOX_INTERVAL", "CORS_ORIGINS", "HTTP_TIMEOUT")
+               and not k.startswith("EMAIL_SMTP_")}
         from tests.conftest import _pg_url
         self.schema = "pytest_e2e_" + uuid.uuid4().hex[:8]
         env.update({"NOTIFICATION_DB_URL": _pg_url() or "", "NOTIFICATION_DB_SCHEMA": self.schema,
                     "TDTU_ENV_FILE": str(tmp / ".env"), "TDTU_RUN_DIR": str(tmp / "run"), "TDTU_LOG_DIR": str(tmp / "logs"),
                     "DATA_DIR": str(tmp / "data"), "OUTBOX_INTERVAL": "2", "WEB_PORT": str(self.ports["WEB"]),
                     "CORS_ORIGINS": f"http://127.0.0.1:{self.ports['WEB']}", "LOG_LEVEL": "WARNING"})
-        for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW"):
+        for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW", "MOCK_EMAIL"):
             env[f"{n}_URL"] = f"http://127.0.0.1:{self.ports[n]}"
+        # OTP bật như .env.example; khóa email cố định để test đọc hộp thư mock (biến môi trường thắng .env của init-env)
+        env.update({"OTP_ENABLED": "true", "EMAIL_API_KEY": EMAIL_API_KEY, "EMAIL_WEBHOOK_SECRET": "e2e-webhook-secret-" + "s" * 16,
+                    "EMAIL_PROVIDER_URL": env["MOCK_EMAIL_URL"],
+                    "EMAIL_WEBHOOK_URL": env["NOTIFICATION_URL"] + "/internal/webhooks/email-status"})
         self.env = env
         self.url = {n.lower(): f"http://127.0.0.1:{p}" for n, p in self.ports.items()}
 
@@ -82,18 +90,32 @@ def login(c, email, pw="matkhau123"):
     return H(r.json()["access_token"])
 
 
+def read_otp(c, email):
+    r = requests.get(c.url["mock_email"] + "/api/emails", headers={"X-API-Key": EMAIL_API_KEY}, params={"to": email}, timeout=10)
+    assert r.status_code == 200 and r.json()["items"], r.text
+    return re.search(r"\b(\d{6})\b", r.json()["items"][0]["content"]).group(1)
+
+
 def register(c, email, role):
+    """Đăng ký; bật OTP thì đăng nhập bị chặn tới khi nhập mã từ hộp thư MockMail (xác nhận xong là có token)."""
     body = {"name": "Người Dùng E2E", "email": email, "password": "matkhau123", "role": role, "accept_terms": True}
     if role == "chu_quan":                               # chủ quán khai báo tài khoản nhận tiền (VietQR)
         body.update(bank_bin="970436", bank_account="0071000123456", bank_holder="Chủ Quán Thử Nghiệm")
     r = requests.post(c.url["auth"] + "/api/users/register", timeout=10, json=body)
     assert r.status_code == 201, r.text
-    return login(c, email)
+    if not r.json()["verification_required"]:
+        return login(c, email)
+    assert r.json()["otp_sent"] is True, r.text
+    blocked = requests.post(c.url["auth"] + "/api/users/login", json={"email": email, "password": "matkhau123"}, timeout=10)
+    assert blocked.status_code == 403 and blocked.json()["code"] == "EMAIL_NOT_VERIFIED", blocked.text
+    v = requests.post(c.url["auth"] + "/api/users/verify-otp", json={"email": email, "code": read_otp(c, email)}, timeout=10)
+    assert v.status_code == 200, v.text
+    return H(v.json()["access_token"])
 
 
 def test_status_and_docs(cluster):
     r = cluster.manage("status")
-    assert r.stdout.count("OK") == 6, r.stdout
+    assert r.stdout.count("OK") == 7, r.stdout              # 5 service + mock_email + giao diện
     for lang in ("Python/FastAPI", "Node.js/Express", "Java/Spring Boot", "Go/Gin", "PHP"):
         assert lang in r.stdout
     for name in ("auth", "restaurant", "order", "notification", "review"):
@@ -206,6 +228,38 @@ def test_full_business_flow_restart_and_notification_outage(cluster):
     requests.post(u["order"] + "/api/admin/outbox/retry", headers=admin, timeout=10)
     msgs = requests.get(u["notification"] + "/api/notifications/me", headers=owner, timeout=10).json()["items"]
     assert sum(f"#{o3.json()['pickup_code']}" in m["message"] for m in msgs) == 1     # không nhân đôi
+
+
+def test_otp_email_delivered_via_signed_webhook(cluster):
+    """Unit 20 qua `manage.py start`: Auth -> Notification -> MockMail nhận thư; ~1 giây sau MockMail gọi webhook có ký
+    HMAC -> email_logs chuyển delivered (admin xem ở /api/admin/email-logs); hộp thư bounce* -> failed."""
+    c, u = cluster, cluster.url
+    admin = login(c, "admin@e2e.tdtu.vn", "Admin@E2E123")
+    tag = uuid.uuid4().hex[:6]
+    me = requests.get(u["auth"] + "/api/users/me", headers=register(c, f"otp{tag}@student.tdtu.edu.vn", "sinh_vien"),
+                      timeout=10).json()
+    assert me["email_verified_at"]
+    bounce = requests.post(u["auth"] + "/api/users/register", timeout=10, json={
+        "name": "Hộp Thư Lỗi", "email": f"bounce{tag}@student.tdtu.edu.vn", "password": "matkhau123", "accept_terms": True}).json()
+
+    def status_of(uid):
+        items = requests.get(u["notification"] + "/api/admin/email-logs", headers=admin, params={"user_id": uid},
+                             timeout=10).json()["items"]
+        return items[0] if items else None
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        a, b = status_of(me["id"]), status_of(bounce["id"])
+        if a and b and a["status"] == "delivered" and b["status"] == "failed":
+            break
+        time.sleep(0.5)
+    assert a["status"] == "delivered" and a["provider_message_id"].startswith("msg_"), a
+    assert b["status"] == "failed" and "mailbox_not_found" in b["last_error"], b
+    # webhook giả mạo (không có chữ ký đúng) bị từ chối
+    fake = requests.post(u["notification"] + "/internal/webhooks/email-status", timeout=10, data=json.dumps(
+        {"message_id": a["provider_message_id"], "status": "failed", "reason": None, "timestamp": "x"}),
+        headers={"Content-Type": "application/json", "X-Webhook-Signature": "sha256=" + "0" * 64})
+    assert fake.status_code == 401 and fake.json()["code"] == "INVALID_SIGNATURE"
+    assert status_of(me["id"])["status"] == "delivered"
 
 
 def test_negative_security_on_real_services(cluster):
