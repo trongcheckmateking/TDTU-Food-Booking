@@ -60,6 +60,14 @@ def test_admin_erases_student_everywhere(world):
     assert s.auth.patch(f"/api/users/{sv_id}/role", headers=w.admin, json={"role": "chu_quan"}).json()["code"] == "USER_ERASED"
     again = s.auth.post(f"/api/users/{sv_id}/erase", headers=w.admin)
     assert again.status_code == 200 and again.json()["user"]["erased_at"] == body["user"]["erased_at"]
+    # danh sách admin: erased=false ẩn tài khoản đã xóa (giao diện dùng mặc định), true chỉ hiện tài khoản đã xóa,
+    # bỏ trống thì như cũ (cả hai)
+    def ids(**params):
+        r = s.auth.get("/api/users", headers=w.admin, params={"role": "sinh_vien", "page_size": 100, **params})
+        assert r.status_code == 200, r.text
+        return {u["id"] for u in r.json()["items"]}
+    assert sv_id not in ids(erased="false") and sv_id in ids(erased="true") and sv_id in ids()
+    assert all(u["erased_at"] for u in s.auth.get("/api/users", headers=w.admin, params={"erased": "true"}).json()["items"])
     # email cũ đăng ký lại được như người mới
     s.register(w.emails["sv"])
 

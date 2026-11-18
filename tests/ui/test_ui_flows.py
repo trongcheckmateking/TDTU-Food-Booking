@@ -391,17 +391,19 @@ def test_full_flow_three_roles(browser, tmp_path):
     tmp.page.wait_for_url(re.compile(r"index\.html\?(expired|locked)=1"))
     expect(tmp.page.locator(".notice")).to_be_visible()
 
-    # Người dùng yêu cầu xóa dữ liệu -> admin xóa trong bảng chi tiết, phải gõ lại đúng email
-    ad.page.locator("tbody tr", has_text=email).get_by_role("button", name="Chi tiết").click()
-    ad.page.locator(".drawer").get_by_role("button", name="Xóa dữ liệu cá nhân").click()
+    # Admin xóa tài khoản bằng nút "Xóa" trên hàng, phải gõ lại đúng email; tài khoản đã xóa không còn trong danh sách
+    ad.page.locator("tbody tr", has_text=email).get_by_role("button", name=f"Xóa tài khoản {email}").click()
     dlg = ad.page.locator(".dialog")
     dlg.locator("input").fill("sai@email.vn")
-    dlg.get_by_role("button", name="Xóa dữ liệu").click()
+    dlg.get_by_role("button", name="Xóa tài khoản").click()
     expect(ad.page.locator(".toast", has_text="Email xác nhận không khớp")).to_be_visible()
     dlg.locator("input").fill(email)
-    dlg.get_by_role("button", name="Xóa dữ liệu").click()
-    expect(ad.page.locator(".toast", has_text="Đã xóa dữ liệu cá nhân")).to_be_visible()
+    dlg.get_by_role("button", name="Xóa tài khoản").click()
+    expect(ad.page.locator(".toast", has_text="Đã xóa tài khoản")).to_be_visible()
+    expect(ad.page.locator("tbody tr", has_text=email)).to_have_count(0)
     ad.page.get_by_placeholder("Tên hoặc email…").fill("Người dùng đã xóa")
+    expect(ad.page.locator("tbody tr", has_text="Đã xóa dữ liệu")).to_have_count(0)        # mặc định ẩn tài khoản đã xóa
+    ad.page.get_by_label("Trạng thái").select_option("erased")
     expect(ad.page.locator("tbody tr", has_text="Đã xóa dữ liệu").first).to_be_visible()
 
     errors = sv.errors + cq.errors + ad.errors

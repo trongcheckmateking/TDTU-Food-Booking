@@ -645,8 +645,12 @@ def get_avatar(name: str):
 def list_users(role: Annotated[Literal["sinh_vien", "chu_quan", "admin"] | None, Query()] = None,
                status: Annotated[Literal["active", "locked"] | None, Query()] = None,
                q: Annotated[str | None, Query(max_length=100)] = None, page: Page = 1, page_size: PageSize = 20,
+               erased: Annotated[bool | None, Query(description="false: ẩn tài khoản đã xóa; true: chỉ tài khoản đã xóa; "
+                                                                "bỏ trống: tất cả")] = None,
                _: dict = Depends(admin_only), conn: sqlite3.Connection = Depends(conn_dep)):
     sql, args = "SELECT * FROM users WHERE 1=1", []
+    if erased is not None:
+        sql += " AND erased_at IS NOT NULL" if erased else " AND erased_at IS NULL"
     if role:
         sql += " AND role=?"; args.append(role)
     if status:
