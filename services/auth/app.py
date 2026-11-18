@@ -270,6 +270,32 @@ def _otp_error(status: int, code: str, message: str, **extra) -> ApiError:
     return ApiError(status, code, message, extra=extra or None, headers=headers)
 
 
+def _resend_block(conn: sqlite3.Connection, user_id: str, s: OtpSettings, now: datetime) -> ApiError | None:
+    """Giới hạn gửi mã (dùng chung cho resend-otp và đăng ký lại tài khoản chưa xác nhận). GỌI TRONG transaction.
+    Trả lỗi 429 nếu gửi quá sớm / quá nhiều trong 1 giờ, None nếu được gửi mã mới."""
+    last = conn.execute("SELECT MAX(created_at) FROM otp_codes WHERE user_id=? AND purpose='verify_email'",
+                        (user_id,)).fetchone()[0]
+    hour_ago = _iso(now - timedelta(hours=1))
+    recent = conn.execute("SELECT COUNT(*), MIN(created_at) FROM otp_codes WHERE user_id=? AND "
+                          "purpose='verify_email' AND created_at > ?", (user_id, hour_ago)).fetchone()
+    waited = (now - _parse_iso(last)).total_seconds() if last else None
+    if waited is not None and waited < s.resend_seconds:
+        wait = max(1, math.ceil(s.resend_seconds - waited))
+        return _otp_error(429, "OTP_RESEND_TOO_SOON", f"Vui lòng chờ {wait} giây rồi gửi lại mã", retry_after=wait)
+    if recent[0] >= s.per_hour:
+        wait = max(1, math.ceil((_parse_iso(recent[1]) + timedelta(hours=1) - now).total_seconds()))
+        return _otp_error(429, "OTP_RESEND_LIMIT",
+                          f"Đã gửi {s.per_hour} mã trong 1 giờ, vui lòng thử lại sau {max(1, round(wait / 60))} phút",
+                          retry_after=wait)
+    return None
+
+
+def _reclaimable(u: dict | None) -> bool:
+    """Tài khoản đăng ký nhưng CHƯA nhập mã OTP: cho đăng ký lại cùng email (cập nhật thông tin, gửi mã mới)."""
+    return bool(u) and u["status"] == "active" and u["role"] != "admin" and not u.get("email_verified_at") \
+        and not u.get("erased_at")
+
+
 def _require_otp() -> OtpSettings:
     if not otp_enabled():
         raise ApiError(404, "OTP_DISABLED", "Hệ thống không bật xác nhận email bằng mã OTP")
@@ -281,23 +307,44 @@ def _require_otp() -> OtpSettings:
           summary="Đăng ký tài khoản sinh viên hoặc chủ quán",
           description="Bật OTP (OTP_ENABLED=true): tài khoản chưa xác nhận email, mã 6 số được gửi qua email "
                       "(verification_required=true); Notification / nhà cung cấp email lỗi thì đăng ký vẫn thành công "
-                      "với otp_sent=false, người dùng bấm gửi lại mã.")
+                      "với otp_sent=false, người dùng bấm gửi lại mã. Email đã đăng ký nhưng CHƯA xác nhận "
+                      "thì đăng ký lại được (cập nhật thông tin, gửi mã mới, theo giới hạn gửi lại mã).",
+          responses={409: {"description": "EMAIL_EXISTS (email đã xác nhận / tài khoản bị khóa)"},
+                     429: {"description": "OTP_RESEND_TOO_SOON / OTP_RESEND_LIMIT khi đăng ký lại quá sớm"}})
 def register(data: RegisterIn, conn: sqlite3.Connection = Depends(conn_dep)):
     uid, ts, otp = new_id(), now_iso(), otp_enabled()
     otp_id = code = None
+    error: ApiError | None = None
     try:
         with transaction(conn):          # user + mã OTP trong CÙNG giao dịch
-            conn.execute("INSERT INTO users (id,name,email,password_hash,role,phone,status,token_version,created_at,"
+            old = row(conn.execute("SELECT * FROM users WHERE email=?", (data.email,)).fetchone()) if otp else None
+            if _reclaimable(old):
+                # Đăng ký rồi tải lại trang trước khi nhập mã: chưa ai chứng minh sở hữu email nên ghi đè thông tin
+                # (mật khẩu mới) và gửi mã mới. Không raise trong transaction (giữ quy ước ghi lỗi rồi raise sau).
+                error = _resend_block(conn, old["id"], otp_settings(), datetime.now(timezone.utc))
+                if not error:
+                    uid = old["id"]
+                    conn.execute("UPDATE users SET name=?, password_hash=?, role=?, phone=?, bank_bin=?, bank_account=?, "
+                                 "bank_holder=?, terms_accepted_at=?, updated_at=?, token_version=token_version+1 "
+                                 "WHERE id=? AND email_verified_at IS NULL",
+                                 (data.name, hash_password(data.password), data.role, data.phone, data.bank_bin,
+                                  data.bank_account, data.bank_holder, ts, ts, uid))
+                    otp_id, code = new_otp(conn, uid)
+                    log.info("Đăng ký lại tài khoản chưa xác nhận email: user %s", uid)
+            else:
+                conn.execute("INSERT INTO users (id,name,email,password_hash,role,phone,status,token_version,created_at,"
                          "updated_at,terms_accepted_at,bank_bin,bank_account,bank_holder,email_verified_at) "
                          "VALUES (?,?,?,?,?,?, 'active', 0, ?, ?, ?, ?, ?, ?, ?)",
                          (uid, data.name, data.email, hash_password(data.password), data.role, data.phone, ts, ts, ts,
                           data.bank_bin, data.bank_account, data.bank_holder, None if otp else ts))
-            if otp:
-                otp_id, code = new_otp(conn, uid)
+                if otp:
+                    otp_id, code = new_otp(conn, uid)
     except sqlite3.IntegrityError as e:
         if "users.email" in str(e):
             raise ApiError(409, "EMAIL_EXISTS", "Email đã được sử dụng")
         raise
+    if error:
+        raise error
     user = load_user(conn, uid)
     sent = send_otp(user, otp_id, code) if otp else None          # gọi mạng SAU khi commit
     return {**public(user), "verification_required": otp, "otp_sent": sent,
@@ -410,21 +457,8 @@ def resend_otp(data: OtpResendIn, conn: sqlite3.Connection = Depends(conn_dep)):
     with transaction(conn):              # không raise bên trong: giữ nguyên quy tắc ghi kết quả rồi raise sau
         u = row(conn.execute("SELECT * FROM users WHERE email=?", (data.email,)).fetchone())
         if u and u["status"] == "active" and u["role"] != "admin" and not u.get("email_verified_at"):
-            last = conn.execute("SELECT MAX(created_at) FROM otp_codes WHERE user_id=? AND purpose='verify_email'",
-                                (u["id"],)).fetchone()[0]
-            hour_ago = _iso(now - timedelta(hours=1))
-            recent = conn.execute("SELECT COUNT(*), MIN(created_at) FROM otp_codes WHERE user_id=? AND "
-                                  "purpose='verify_email' AND created_at > ?", (u["id"], hour_ago)).fetchone()
-            waited = (now - _parse_iso(last)).total_seconds() if last else None
-            if waited is not None and waited < s.resend_seconds:
-                wait = max(1, math.ceil(s.resend_seconds - waited))
-                error = _otp_error(429, "OTP_RESEND_TOO_SOON", f"Vui lòng chờ {wait} giây rồi gửi lại mã", retry_after=wait)
-            elif recent[0] >= s.per_hour:
-                wait = max(1, math.ceil((_parse_iso(recent[1]) + timedelta(hours=1) - now).total_seconds()))
-                error = _otp_error(429, "OTP_RESEND_LIMIT",
-                                   f"Đã gửi {s.per_hour} mã trong 1 giờ, vui lòng thử lại sau {max(1, round(wait / 60))} phút",
-                                   retry_after=wait)
-            else:
+            error = _resend_block(conn, u["id"], s, now)
+            if not error:
                 user = u
                 otp_id, code = new_otp(conn, u["id"])
     if error:

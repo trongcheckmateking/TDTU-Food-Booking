@@ -479,6 +479,32 @@ def test_otp_resend_too_soon_then_new_code_replaces_old(system, otp_auth):
     assert verify(otp_auth, email, new).status_code == 200
 
 
+def test_otp_reregister_unverified_email_sends_new_code(system, otp_auth):
+    """Đăng ký rồi tải lại trang trước khi nhập mã: đăng ký lại cùng email được (cập nhật thông tin, mã mới), theo giới
+    hạn gửi lại mã; email đã xác nhận thì vẫn 409 EMAIL_EXISTS."""
+    email, u = otp_register(system, otp_auth, "sv.dangkylai@student.tdtu.edu.vn")
+    old = system.read_otp(email)
+    body = {"name": "Tên Mới Sau Khi Tải Lại", "email": email, "password": "Matkhau999", "accept_terms": True}
+    r = otp_auth.client.post("/api/users/register", json=body)          # vừa gửi mã xong: phải chờ như gửi lại mã
+    assert r.status_code == 429 and r.json()["code"] == "OTP_RESEND_TOO_SOON", r.text
+    assert 1 <= r.json()["retry_after"] <= 60
+    age_codes(otp_auth, email, 61)
+    r = otp_auth.client.post("/api/users/register", json=body)
+    assert r.status_code == 201, r.text
+    again = r.json()
+    assert again["id"] == u["id"] and again["name"] == "Tên Mới Sau Khi Tải Lại"
+    assert (again["verification_required"], again["otp_sent"], again["email_verified_at"]) == (True, True, None)
+    assert len(system.emails(email)) == 2
+    new = system.read_otp(email)
+    if new != old:
+        assert verify(otp_auth, email, old).json()["code"] == "OTP_INVALID"
+    assert verify(otp_auth, email, new).status_code == 200
+    assert otp_login(otp_auth, email, "Matkhau999").status_code == 200      # mật khẩu của lần đăng ký sau
+    assert otp_login(otp_auth, email).status_code == 401
+    r = otp_auth.client.post("/api/users/register", json=body)          # đã xác nhận: không ghi đè được nữa
+    assert r.status_code == 409 and r.json()["code"] == "EMAIL_EXISTS"
+
+
 def test_otp_resend_hourly_limit_counts_registration_code(system, otp_auth):
     email, _ = otp_register(system, otp_auth)                          # mã 1 (lúc đăng ký)
     for _ in range(4):                                                  # mã 2..5

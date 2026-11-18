@@ -118,6 +118,7 @@ curl -s -X POST http://127.0.0.1:8001/api/users/resend-otp -H 'Content-Type: app
 | Sai mã | 400 `OTP_INVALID`, `remaining_attempts` giảm dần; hết lượt → 429 `OTP_LOCKED` (phải gửi lại mã mới) |
 | Mã quá `OTP_TTL_SECONDS` / đã bị thay bằng mã mới | 400 `OTP_EXPIRED` |
 | Đã xác nhận rồi / tài khoản admin | 409 `ALREADY_VERIFIED` |
+| Đăng ký lại email đã đăng ký nhưng **chưa** nhập mã (ví dụ tải lại trang) | 201 cùng `id`, cập nhật họ tên / mật khẩu / vai trò, gửi mã mới (mã cũ hết hiệu lực); gửi quá sớm → 429 `OTP_RESEND_TOO_SOON` như gửi lại mã. Email đã xác nhận → 409 `EMAIL_EXISTS` |
 | Gửi lại trong `OTP_RESEND_SECONDS` giây / quá `OTP_RESEND_PER_HOUR` mã mỗi giờ | 429 `OTP_RESEND_TOO_SOON` / `OTP_RESEND_LIMIT`, kèm `retry_after` và header `Retry-After` |
 | Notification hoặc nhà cung cấp email lỗi lúc đăng ký | Vẫn 201, `otp_sent: false`; người dùng gửi lại mã sau |
 | `OTP_ENABLED=false` | `verify-otp`, `resend-otp` trả 404 `OTP_DISABLED`; đăng ký trả `verification_required: false` và đăng nhập luôn |

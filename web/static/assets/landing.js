@@ -134,7 +134,14 @@
       try { localStorage.setItem("tdtu_welcome", "1"); } catch (err) { /* không có bộ nhớ: bỏ qua hướng dẫn */ }
       if (u.verification_required) return showOtp(u.email, u.otp_sent, u.resend_after);   // bật OTP: nhập mã rồi mới vào
       await doLogin(body.email, body.password, null);
-    } catch (err) { show(err.message, true); }
+    } catch (err) {
+      // email đã đăng ký nhưng chưa xác nhận, vừa gửi mã cách đây chưa lâu: mở ô nhập mã, đếm ngược tới lúc gửi lại được
+      if (err.code === "OTP_RESEND_TOO_SOON" || err.code === "OTP_RESEND_LIMIT") {
+        showOtp(body.email, null, (err.body && err.body.retry_after) || 60);
+        return show(err.message + ". Nếu đã nhận mã thì nhập mã bên dưới.", true);
+      }
+      show(err.message, true);
+    }
   };
   document.querySelectorAll(".demo button").forEach(b => b.onclick = () => {
     tab(false); $("#lEmail").value = b.dataset.e; $("#lPw").value = b.dataset.p;

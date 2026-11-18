@@ -34,8 +34,10 @@ class Cluster:
     def __init__(self, tmp: Path):
         self.tmp = tmp
         self.ports = {n: free_port() for n in ("AUTH", "RESTAURANT", "ORDER", "NOTIFICATION", "REVIEW", "WEB", "MOCK_EMAIL")}
+        # bỏ EMAIL_SMTP_*: .env thật có thể bật gửi thư qua SMTP, test KHÔNG được gửi thư thật (dùng hộp thư mock)
         env = {k: v for k, v in os.environ.items()
-               if k not in ("JWT_SECRET", "INTERNAL_KEY", "DATA_DIR", "OUTBOX_INTERVAL", "CORS_ORIGINS", "HTTP_TIMEOUT")}
+               if k not in ("JWT_SECRET", "INTERNAL_KEY", "DATA_DIR", "OUTBOX_INTERVAL", "CORS_ORIGINS", "HTTP_TIMEOUT")
+               and not k.startswith("EMAIL_SMTP_")}
         from tests.conftest import _pg_url
         self.schema = "pytest_e2e_" + uuid.uuid4().hex[:8]
         env.update({"NOTIFICATION_DB_URL": _pg_url() or "", "NOTIFICATION_DB_SCHEMA": self.schema,

@@ -266,7 +266,11 @@ python scripts/smoke_test.py
 - **Làm gì:** kiểm tra nhanh hệ thống **đang chạy** bằng một luồng đầy đủ qua API: health 5 service → đăng ký chủ quán và
   sinh viên → (bật OTP: đăng nhập trước khi xác nhận bị chặn, đọc mã trong hộp thư MockMail, nhập mã) → tạo quán →
   admin duyệt → thêm giỏ → checkout → chuyển khoản / xác nhận tiền → đơn tiền mặt (`notification_status` = `sent`) →
-  thông báo → đánh giá → token sai bị từ chối. Không in mã OTP ra màn hình. Cần admin demo (`seed`) hoặc đặt `SMOKE_ADMIN_EMAIL`, `SMOKE_ADMIN_PASSWORD`.
+  thông báo → đánh giá → token sai bị từ chối. Không in mã OTP ra màn hình.
+- **Tắt gửi thư thật trước khi chạy:** `smoke_test.py` và `pytest tests/ui` dùng hệ thống **đang chạy** và đọc mã trong
+  hộp thư giả lập. Nếu `.env` đang điền `EMAIL_SMTP_*`, thư sẽ gửi thật tới các địa chỉ thử (bị trả về) và bước đọc mã
+  lỗi: để trống 3 dòng `EMAIL_SMTP_HOST/USER/PASSWORD`, `stop` rồi `start` lại trước khi chạy. `pytest tests/unit
+  tests/integration tests/e2e` tự bỏ cấu hình SMTP, không gửi thư thật. Cần admin demo (`seed`) hoặc đặt `SMOKE_ADMIN_EMAIL`, `SMOKE_ADMIN_PASSWORD`.
 - **In ra:** mỗi bước một dòng `  ĐẠT  checkout` hoặc `  LỖI  checkout  (chi tiết lỗi từ API)`, cuối cùng
   `KẾT QUẢ: ĐẠT` hoặc `KẾT QUẢ: 2 bước lỗi`.
 - **Để làm gì:** chạy sau `start` / sau khi sửa code để chắc cả luồng còn chạy, trước khi demo. **Tạo thêm** tài khoản

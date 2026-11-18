@@ -27,6 +27,8 @@ def client(monkeypatch):
     monkeypatch.setenv("EMAIL_WEBHOOK_URL", "")            # mặc định không gửi webhook
     monkeypatch.setenv("EMAIL_WEBHOOK_SECRET", SECRET)
     monkeypatch.setattr(mock, "WEBHOOK_DELAY", 0)
+    for k in ("EMAIL_SMTP_HOST", "EMAIL_SMTP_USER", "EMAIL_SMTP_PASSWORD"):   # không bao giờ gửi thư thật khi test
+        monkeypatch.delenv(k, raising=False)
     mock.reset_state()
     with TestClient(mock.app) as c:
         yield c

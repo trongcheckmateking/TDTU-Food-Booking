@@ -122,7 +122,7 @@ Trang `/docs` của Restaurant, Order, Notification, Review tải Swagger UI t�
 
 Bật mặc định (`OTP_ENABLED=true` trong `.env`). Đăng ký → Auth tạo mã 6 số (DB chỉ lưu HMAC) → Notification gửi qua nhà
 cung cấp email giả lập MockMail → giao diện hiện form nhập mã → đúng mã thì đăng nhập luôn. Chưa xác nhận thì đăng nhập
-báo `EMAIL_NOT_VERIFIED` và mở form nhập mã. Sai 5 lần thì mã bị khóa; gửi lại mã cách nhau tối thiểu 60 giây, tối đa
+báo `EMAIL_NOT_VERIFIED` và mở form nhập mã. Đăng ký rồi tải lại trang khi chưa nhập mã thì đăng ký lại cùng email được (cập nhật thông tin, gửi mã mới). Sai 5 lần thì mã bị khóa; gửi lại mã cách nhau tối thiểu 60 giây, tối đa
 5 mã / giờ. Notification hoặc MockMail lỗi thì đăng ký vẫn thành công (`otp_sent=false`), bấm *Gửi lại mã* sau.
 
 **Gửi mã tới hộp thư thật:** điền `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD` trong `.env` (Gmail + mật
