@@ -209,6 +209,8 @@ def send_smtp(settings: dict, to: str, subject: str, content: str) -> str | None
         return "smtp_auth_failed"
     except smtplib.SMTPRecipientsRefused:
         return "mailbox_not_found"
+    except smtplib.SMTPResponseException as e:        # máy chủ SMTP từ chối: ghi mã (vd smtp_550), không ghi nội dung thư
+        return f"smtp_{e.smtp_code}"
     except (smtplib.SMTPException, OSError) as e:
         return "smtp_" + type(e).__name__.lower()
 

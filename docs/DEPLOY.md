@@ -107,6 +107,10 @@ EMAIL_SMTP_FROM=               # trống = dùng EMAIL_SMTP_USER (Gmail bắt bu
 4. Đăng ký một tài khoản bằng **email thật** của bạn: thư "TDTU Food - Mã xác nhận email" tới sau vài giây (xem cả thư mục
    Spam). `GET :8004/api/admin/email-logs` hiện `delivered`; sai mật khẩu ứng dụng thì `failed` với lý do `smtp_auth_failed`.
 
+**Không dùng email sinh viên TDTU (`...@student.tdtu.edu.vn`) làm tài khoản gửi:** nhà trường chặn tài khoản này gửi thư
+ra ngoài trường (Gmail trả `550 5.7.1 Người dùng sinh viên bị hạn chế gửi/nhận thư ngoài hệ thống`, `last_error` ghi
+`smtp_550`). Dùng một Gmail cá nhân `@gmail.com` (ví dụ tạo riêng một tài khoản cho nhóm).
+
 Lưu ý: `EMAIL_SMTP_PASSWORD` là bí mật như `JWT_SECRET`: không commit `.env`, không chụp màn hình, không gửi qua chat.
 Khi gửi thật, MockMail **không giữ nội dung thư** trong bộ nhớ (`GET /api/emails` chỉ còn trạng thái) và không còn giả
 lập địa chỉ `fail*` / `bounce*`. Gmail giới hạn khoảng 500 thư / ngày với tài khoản thường, đủ cho demo và chạy thử.

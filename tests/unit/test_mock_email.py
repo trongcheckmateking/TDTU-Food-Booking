@@ -346,3 +346,8 @@ def test_smtp_log_has_no_code_or_password(client, smtp, caplog):
     mock.wait_webhooks()
     assert "042917" not in caplog.text and "app-password-0123456789" not in caplog.text
     assert "sv***@student.tdtu.edu.vn" in caplog.text
+
+
+def test_smtp_server_rejection_reports_code(smtp):
+    smtp.fail = mock.smtplib.SMTPDataError(550, b"5.7.1 bi han che gui thu ngoai he thong")
+    assert mock.send_smtp(mock.smtp_settings(), "a@gmail.com", "s", "c") == "smtp_550"
