@@ -476,6 +476,76 @@ def test_login_unverified_account_shows_otp_form(browser):
     p.close()
 
 
+def _age_otp_codes(email: str, seconds: int = 61) -> bool:
+    """Lùi thời điểm gửi mã của email trong auth.db (thay cho chờ OTP_RESEND_SECONDS thật). False nếu không mở được DB."""
+    import sqlite3
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from common import config
+    db = Path(config.data_dir()) / "auth.db"
+    if not db.is_file():
+        return False
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE otp_codes SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', created_at, ?) "
+                 "WHERE user_id = (SELECT id FROM users WHERE email=?)", (f"-{seconds} seconds", email))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def test_reregister_after_refresh_before_entering_otp(browser):
+    """Lỗi người dùng báo: đăng ký -> tải lại trang khi chưa nhập mã -> đăng ký lại cùng email từng báo "Email đã được sử
+    dụng". Nay: đăng ký lại ngay thì mở ô nhập mã + đếm ngược (không báo trùng email); sau 60 giây đăng ký lại thì gửi mã
+    mới, mật khẩu mới có hiệu lực; email đã xác nhận thì vẫn báo đã được sử dụng."""
+    p = Page(browser)
+    email = f"uilai{uuid.uuid4().hex[:6]}@student.tdtu.edu.vn"
+    register_on_page(p, email)
+    if not wait_signup_result(p):
+        p.close()
+        pytest.skip("hệ thống đang tắt OTP (OTP_ENABLED=false)")
+    first = read_otp(email)
+
+    p.page.reload()                                                         # tải lại trang, chưa nhập mã
+    register_on_page(p, email)
+    expect(p.page.locator("#fOtp")).to_be_visible()
+    expect(p.page.locator("#msg")).not_to_contain_text("đã được sử dụng")
+    expect(p.page.locator("#msg")).to_contain_text("Vui lòng chờ")
+    expect(p.page.locator("#oEmail")).to_have_value(email)
+    expect(p.page.locator("#oResend")).to_be_disabled()                     # đếm ngược tới lúc gửi lại được
+    p.shot("09_dang_ky_lai_qua_som")
+
+    if not _age_otp_codes(email):
+        p.close()
+        pytest.skip("không mở được auth.db của hệ thống đang chạy để bỏ qua 60 giây chờ")
+    p.page.reload()
+    p.page.click("#tReg")
+    p.page.fill("#rName", "Tên Sau Khi Tải Lại"); p.page.fill("#rEmail", email); p.page.fill("#rPw", "matkhaumoi9")
+    p.page.check("#rTerms")
+    p.page.click("#fReg button[type=submit]")
+    expect(p.page.locator("#fOtp")).to_be_visible()
+    expect(p.page.locator("#msg")).to_contain_text("Đã gửi mã xác nhận")
+    second = read_otp(email)
+    if second != first:                                                     # mã cũ đã hết hiệu lực
+        p.page.fill("#oCode", first)
+        p.page.click("#fOtp button[type=submit]")
+        expect(p.page.locator("#msg")).to_contain_text("Mã xác nhận")
+    p.page.fill("#oCode", second)
+    p.page.click("#fOtp button[type=submit]")
+    p.page.wait_for_url(re.compile(r"student\.html"))
+    p.close()
+
+    q = Page(browser)                                                       # mật khẩu của lần đăng ký sau có hiệu lực
+    q.login(email, "matkhaumoi9")
+    q.page.wait_for_url(re.compile(r"student\.html"))
+    q.close()
+    r = Page(browser)                                                       # đã xác nhận: không đăng ký đè được nữa
+    register_on_page(r, email)
+    expect(r.page.locator("#msg")).to_contain_text("Email đã được sử dụng")
+    expect(r.page.locator("#fOtp")).to_be_hidden()
+    assert not [e for e in p.errors + q.errors + r.errors if "HTTP 5" in e or "pageerror" in e]
+    r.close()
+
+
 def test_session_expired_redirects(browser):
     p = Page(browser)
     p.page.goto(BASE + "/index.html")
